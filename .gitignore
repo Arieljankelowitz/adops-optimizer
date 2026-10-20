@@ -1,0 +1,19 @@
+# Private inputs: raw performance data and source documents never enter the repo
+data/
+*.csv
+*.xlsx
+*.docx
+private/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
