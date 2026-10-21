@@ -2,8 +2,8 @@
   "kind": "call_tool",
   "recommendation": null,
   "tool_call": {
-    "period_id": "P_db3a9fe82cc330fe",
-    "segment_id": "G_e3692def3acf89ba",
+    "period_id": "P_4e55340e284b3f3f",
+    "segment_id": "G_4b4a26035e22e032",
     "tool": "daily_trend"
   }
 }

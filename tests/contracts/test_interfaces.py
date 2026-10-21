@@ -114,7 +114,10 @@ def test_breakdown_default_limit() -> None:
     assert inspect.signature(tools.breakdown).parameters["limit"].default == 10
 
 
-IMPLEMENTED = {load.load_csv, quality.assess_quality, quality.refine_quality}
+IMPLEMENTED = {
+    load.load_csv, quality.assess_quality, quality.refine_quality,
+    metrics.aggregate, detectors.detect_opportunities, scenarios.compute_scenarios,
+}
 STUBS = [(f, e) for f, e in EXPECTED if f not in IMPLEMENTED]
 
 
