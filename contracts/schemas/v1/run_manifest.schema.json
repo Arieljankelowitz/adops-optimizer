@@ -32,6 +32,18 @@
       "title": "Input Sha256",
       "type": "string"
     },
+    "model_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model Id"
+    },
     "model_profile_hash": {
       "anyOf": [
         {
@@ -43,6 +55,18 @@
         }
       ],
       "title": "Model Profile Hash"
+    },
+    "model_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model Revision"
     },
     "prompt_hash": {
       "anyOf": [

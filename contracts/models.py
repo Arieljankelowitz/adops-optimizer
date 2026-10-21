@@ -532,6 +532,10 @@ class RunManifest(Contract):
     assumption_hash: Sha256
     generated_at: datetime
     files: dict[str, Sha256]
+    # Served model identity, shown with every cached or fresh report; None when
+    # no model ran (deterministic-only runs).
+    model_id: str | None = None
+    model_revision: str | None = None
 
 
 class ProgressEvent(Contract):

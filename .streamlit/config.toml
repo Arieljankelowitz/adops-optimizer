@@ -1,0 +1,7 @@
+# Local, private defaults. Uploads are parsed in memory and limited to the
+# input contract's size bound; usage statistics are never sent.
+[server]
+maxUploadSize = 100
+
+[browser]
+gatherUsageStats = false

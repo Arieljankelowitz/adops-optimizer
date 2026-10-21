@@ -5,11 +5,13 @@ description = "Turns a daily ad-performance export into a short, evidence-linked
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "altair>=6.3.0",
     "httpx>=0.28.1",
     "jsonschema>=4.26.0",
     "pandas>=2.2",
     "pydantic>=2.9",
     "pyyaml>=6.0.3",
+    "streamlit>=1.66.1",
 ]
 
 [dependency-groups]
