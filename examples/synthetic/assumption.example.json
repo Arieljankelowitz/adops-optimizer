@@ -1,5 +1,5 @@
 {
-  "assumption_id": "A_9f9f88cba6309ab3",
+  "assumption_id": "A_fcbe9272d2b150e6",
   "bounds": {
     "maximum": "0.50",
     "minimum": "0.01"
@@ -8,10 +8,10 @@
   "label": "Additional eligible request fraction",
   "not_observed": true,
   "parameter_key": "additional_request_fraction",
-  "period_id": "P_7164c90f00f0dcea",
+  "period_id": "P_db3a9fe82cc330fe",
   "rationale": "Planning default for a small, reversible allocation test.",
-  "run_namespace": "N_2a4ded25dcce2c06",
-  "segment_id": "G_710d1372b8ab8813",
+  "run_namespace": "N_f709e79515efce5d",
+  "segment_id": "G_e3692def3acf89ba",
   "selector": "default_test_template",
   "unit": "fraction",
   "value": "0.10"

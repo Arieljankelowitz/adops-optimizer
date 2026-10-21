@@ -25,6 +25,8 @@ class InputConfig(Config):
     money_quantum: DecimalValue = Decimal("0.01")
     rate_quantum: DecimalValue = Decimal("0.01")
     date_format: str = "%Y-%m-%d"
+    # Tagged bucket for blank dimension cells; the raw blank stays in the audit map.
+    unknown_dimension_label: str = "UNKNOWN"
 
 
 class QualityConfig(Config):
@@ -48,6 +50,11 @@ class QualityConfig(Config):
     country_placeholders: tuple[str, ...] = ("", "-", "--", "unknown", "null", "n/a")
     size_sentinel: int = 9999
     size_max_pixels: int = 4096
+    # Non-WxH size labels accepted as documented special formats.
+    allowed_special_sizes: tuple[str, ...] = ()
+    # Versioned accepted country reference (pipeline/countries.py) plus documented extras.
+    country_reference: str = "iso3166_alpha2_v1"
+    extra_accepted_countries: tuple[str, ...] = ()
     reconciliation_epsilon: DecimalValue = Decimal("0.000001")
     srpm_multiplier: int = 1_000_000
     srpm_alternative_multiplier: int = 1_000
@@ -59,6 +66,14 @@ class QualityConfig(Config):
     granularity_coverage: DecimalValue = Decimal("0.95")
     zero_bid_response_share: DecimalValue = Decimal("0.01")
     bid_below_floor_response_share: DecimalValue = Decimal("0.01")
+    # DQ19 materiality gates; keep aligned with AnalyticsConfig eligibility defaults.
+    materiality_min_requests: int = 10_000_000
+    materiality_min_revenue: DecimalValue = Decimal("100")
+    materiality_waste_min_requests: int = 100_000_000
+    materiality_wins_min_wins: int = 1_000_000
+    sensitivity_multipliers: tuple[DecimalValue, ...] = (Decimal("0.5"), Decimal("2"))
+    # Affected segments listed per issue (largest by requests); totals cover all rows.
+    max_issue_segments: int = Field(default=100, ge=1)
 
 
 class AnalyticsConfig(Config):

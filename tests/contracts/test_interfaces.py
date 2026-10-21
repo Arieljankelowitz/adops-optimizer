@@ -1,4 +1,4 @@
-"""The frozen core signatures: names, parameters and annotations, all still stubs."""
+"""The frozen core signatures: names, parameters and annotations; unbuilt stages stay stubs."""
 
 import inspect
 import typing
@@ -114,7 +114,11 @@ def test_breakdown_default_limit() -> None:
     assert inspect.signature(tools.breakdown).parameters["limit"].default == 10
 
 
-@pytest.mark.parametrize("func,expected", EXPECTED, ids=lambda v: getattr(v, "__name__", ""))
+IMPLEMENTED = {load.load_csv, quality.assess_quality, quality.refine_quality}
+STUBS = [(f, e) for f, e in EXPECTED if f not in IMPLEMENTED]
+
+
+@pytest.mark.parametrize("func,expected", STUBS, ids=lambda v: getattr(v, "__name__", ""))
 def test_stubs_are_not_implemented(
     func: Callable[..., object], expected: dict[str, object]
 ) -> None:
