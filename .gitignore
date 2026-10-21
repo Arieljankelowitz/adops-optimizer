@@ -1,17 +1,81 @@
-# Private inputs: raw performance data and source documents never enter the repo
+# Private inputs: raw performance data and source documents never enter the repo.
+# Only independently generated synthetic files are allowlisted below.
 data/
-*.csv
-*.xlsx
-*.docx
 private/
+/inputs/
+/uploads/
+/source-docs/
+/plans/
+/reviews/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.docx
+*.pdf
+!tests/fixtures/synthetic/*.csv
+!examples/synthetic/*.csv
 
-# Python
+# Derived private artifacts of any format
+/outputs/
+/reports/
+/evidence/
+/artifacts/
+/runs/
+/cache/
+/.cache/
+/.streamlit/cache/
+/.tmp/
+/.firecrawl/
+*.parquet
+*.arrow
+*.feather
+*.sqlite*
+*.db
+*.log
+*.jsonl
+*.pkl
+*.pickle
+
+# Private run bundle file names, wherever they land (synthetic examples excepted)
+manifest.json
+quality.json
+facts.json
+assumptions.json
+scenarios.json
+candidates.json
+analyses.json
+validation.json
+report.json
+report.md
+render_audit.json
+!examples/synthetic/*.json
+!examples/synthetic/*.md
+
+# Recordings and screenshots
+*.mp4
+*.mov
+*.webm
+*.har
+/recordings/
+/screenshots/
+
+# Credentials, model caches, environments
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.pem
+*.key
+/.hf/
+/hf-cache/
+/model-cache/
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-.env
 *.egg-info/
+.pytest_cache/
 
 # OS / editor
 .DS_Store

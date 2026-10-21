@@ -1,0 +1,40 @@
+{
+  "assumption_ids": [
+    "A_9f9f88cba6309ab3"
+  ],
+  "candidate_id": "C_c744008c453cdbf0",
+  "confidence_in_observation": "medium",
+  "counter_evidence_fact_ids": [],
+  "decision": "recommend_test",
+  "hypothesis_codes": [
+    "traffic_mix_or_configuration_unverified"
+  ],
+  "merge_source_candidate_ids": [],
+  "observation_statements": [
+    {
+      "fact_ids": [
+        "F_420f9c855f2d612f",
+        "F_9416e8d3e17c288a",
+        "F_426b7bf42825defb"
+      ],
+      "template_id": "metric_vs_baseline"
+    }
+  ],
+  "overlap_group_ids": [],
+  "period_id": "P_7164c90f00f0dcea",
+  "prerequisite_codes": [
+    "confirm_eligible_inventory"
+  ],
+  "risk_codes": [
+    "demand_saturation"
+  ],
+  "scenario_ids": [
+    "S_32f5f0f434047ed5"
+  ],
+  "segment_id": "G_710d1372b8ab8813",
+  "success_metric_keys": [
+    "profit_per_million_requests",
+    "profit"
+  ],
+  "test_template_id": "matched_allocation_holdout"
+}

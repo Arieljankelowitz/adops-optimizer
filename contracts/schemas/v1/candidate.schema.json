@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "DetectorFamily": {
+      "enum": [
+        "scale_winner",
+        "wasted_requests",
+        "margin_leak",
+        "floor_high_bid",
+        "floor_low_bid",
+        "wins_impressions_discrepancy",
+        "trend",
+        "combination_outlier"
+      ],
+      "title": "DetectorFamily",
+      "type": "string"
+    },
+    "EligibilityStatus": {
+      "enum": [
+        "eligible",
+        "exploratory",
+        "rejected"
+      ],
+      "title": "EligibilityStatus",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/candidate.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_id": {
+      "pattern": "^C_[0-9a-f]{16}$",
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "counter_evidence_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Counter Evidence Fact Ids",
+      "type": "array"
+    },
+    "daily_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Daily Fact Ids",
+      "type": "array"
+    },
+    "eligibility": {
+      "$ref": "#/$defs/EligibilityStatus"
+    },
+    "family": {
+      "$ref": "#/$defs/DetectorFamily"
+    },
+    "overlap_group_ids": {
+      "items": {
+        "pattern": "^O_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Overlap Group Ids",
+      "type": "array"
+    },
+    "peer_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Peer Fact Ids",
+      "type": "array"
+    },
+    "period_id": {
+      "pattern": "^P_[0-9a-f]{16}$",
+      "title": "Period Id",
+      "type": "string"
+    },
+    "quality_issue_ids": {
+      "items": {
+        "pattern": "^Q_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Quality Issue Ids",
+      "type": "array"
+    },
+    "rejection_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rejection Reason"
+    },
+    "segment_id": {
+      "pattern": "^G_[0-9a-f]{16}$",
+      "title": "Segment Id",
+      "type": "string"
+    },
+    "trigger_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Trigger Fact Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "candidate_id",
+    "family",
+    "segment_id",
+    "period_id",
+    "eligibility",
+    "trigger_fact_ids",
+    "daily_fact_ids",
+    "peer_fact_ids",
+    "counter_evidence_fact_ids",
+    "quality_issue_ids",
+    "overlap_group_ids"
+  ],
+  "title": "Candidate",
+  "type": "object",
+  "x-schema-version": "1"
+}

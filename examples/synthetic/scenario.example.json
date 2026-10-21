@@ -1,0 +1,32 @@
+{
+  "assumption_ids": [
+    "A_9f9f88cba6309ab3"
+  ],
+  "conditional": true,
+  "displaced_cost_treatment": "unknown_disclosed",
+  "formula_id": "additional_eligible_requests_v1",
+  "historical_fact_ids": [
+    "F_6fe44deb1060379f",
+    "F_420f9c855f2d612f"
+  ],
+  "horizon": "observed_period_comparable_exposure",
+  "limitation_codes": [
+    "demand_saturation",
+    "displaced_profit_unknown"
+  ],
+  "overlap_group_ids": [],
+  "period_id": "P_7164c90f00f0dcea",
+  "prerequisite_codes": [
+    "confirm_eligible_inventory",
+    "confirm_capacity"
+  ],
+  "profit_at_risk_fact_id": null,
+  "result_fact_ids": [
+    "F_550c6442330b8ac2"
+  ],
+  "revenue_at_risk_fact_id": null,
+  "run_namespace": "N_2a4ded25dcce2c06",
+  "scenario_id": "S_32f5f0f434047ed5",
+  "segment_id": "G_710d1372b8ab8813",
+  "template": "additional_eligible_requests"
+}

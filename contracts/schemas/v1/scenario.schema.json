@@ -1,0 +1,189 @@
+{
+  "$defs": {
+    "DisplacedCostTreatment": {
+      "enum": [
+        "subtracted_matched_source",
+        "unknown_disclosed",
+        "not_applicable"
+      ],
+      "title": "DisplacedCostTreatment",
+      "type": "string"
+    },
+    "PrerequisiteCode": {
+      "enum": [
+        "confirm_eligible_inventory",
+        "confirm_capacity",
+        "confirm_contract_terms",
+        "reconcile_counters_with_logs",
+        "obtain_bid_distributions",
+        "confirm_export_semantics",
+        "establish_concurrent_holdout"
+      ],
+      "title": "PrerequisiteCode",
+      "type": "string"
+    },
+    "RiskCode": {
+      "enum": [
+        "demand_saturation",
+        "displaced_profit_unknown",
+        "revenue_at_risk",
+        "partner_relationship",
+        "measurement_noise",
+        "one_off_concentration",
+        "counter_semantics_unknown"
+      ],
+      "title": "RiskCode",
+      "type": "string"
+    },
+    "ScenarioTemplate": {
+      "enum": [
+        "additional_eligible_requests",
+        "throttle",
+        "margin_negotiation_sensitivity",
+        "rendering_sensitivity",
+        "not_identifiable"
+      ],
+      "title": "ScenarioTemplate",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/scenario.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Conditional impact computed by code; a null impact is a valid result.",
+  "properties": {
+    "assumption_ids": {
+      "items": {
+        "pattern": "^A_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Assumption Ids",
+      "type": "array"
+    },
+    "conditional": {
+      "const": true,
+      "default": true,
+      "title": "Conditional",
+      "type": "boolean"
+    },
+    "displaced_cost_treatment": {
+      "$ref": "#/$defs/DisplacedCostTreatment"
+    },
+    "formula_id": {
+      "pattern": "^[a-z0-9_]+_v[0-9]+$",
+      "title": "Formula Id",
+      "type": "string"
+    },
+    "historical_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Historical Fact Ids",
+      "type": "array"
+    },
+    "horizon": {
+      "const": "observed_period_comparable_exposure",
+      "default": "observed_period_comparable_exposure",
+      "title": "Horizon",
+      "type": "string"
+    },
+    "limitation_codes": {
+      "items": {
+        "$ref": "#/$defs/RiskCode"
+      },
+      "title": "Limitation Codes",
+      "type": "array"
+    },
+    "overlap_group_ids": {
+      "items": {
+        "pattern": "^O_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Overlap Group Ids",
+      "type": "array"
+    },
+    "period_id": {
+      "pattern": "^P_[0-9a-f]{16}$",
+      "title": "Period Id",
+      "type": "string"
+    },
+    "prerequisite_codes": {
+      "items": {
+        "$ref": "#/$defs/PrerequisiteCode"
+      },
+      "title": "Prerequisite Codes",
+      "type": "array"
+    },
+    "profit_at_risk_fact_id": {
+      "anyOf": [
+        {
+          "pattern": "^F_[0-9a-f]{16}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Profit At Risk Fact Id"
+    },
+    "result_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Result Fact Ids",
+      "type": "array"
+    },
+    "revenue_at_risk_fact_id": {
+      "anyOf": [
+        {
+          "pattern": "^F_[0-9a-f]{16}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Revenue At Risk Fact Id"
+    },
+    "run_namespace": {
+      "pattern": "^N_[0-9a-f]{16}$",
+      "title": "Run Namespace",
+      "type": "string"
+    },
+    "scenario_id": {
+      "pattern": "^S_[0-9a-f]{16}$",
+      "title": "Scenario Id",
+      "type": "string"
+    },
+    "segment_id": {
+      "pattern": "^G_[0-9a-f]{16}$",
+      "title": "Segment Id",
+      "type": "string"
+    },
+    "template": {
+      "$ref": "#/$defs/ScenarioTemplate"
+    }
+  },
+  "required": [
+    "scenario_id",
+    "run_namespace",
+    "template",
+    "segment_id",
+    "period_id",
+    "formula_id",
+    "historical_fact_ids",
+    "assumption_ids",
+    "result_fact_ids",
+    "prerequisite_codes",
+    "displaced_cost_treatment",
+    "overlap_group_ids",
+    "revenue_at_risk_fact_id",
+    "profit_at_risk_fact_id",
+    "limitation_codes"
+  ],
+  "title": "Scenario",
+  "type": "object",
+  "x-schema-version": "1"
+}

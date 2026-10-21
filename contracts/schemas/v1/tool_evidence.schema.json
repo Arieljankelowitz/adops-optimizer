@@ -1,0 +1,652 @@
+{
+  "$defs": {
+    "BreakdownArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/Dimension"
+        },
+        "limit": {
+          "default": 10,
+          "maximum": 25,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "tool": {
+          "const": "breakdown",
+          "default": "breakdown",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "by",
+        "period_id"
+      ],
+      "title": "BreakdownArgs",
+      "type": "object"
+    },
+    "CompareToPeersArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "peer_definition_id": {
+          "pattern": "^D_[0-9a-f]{16}$",
+          "title": "Peer Definition Id",
+          "type": "string"
+        },
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "tool": {
+          "const": "compare_to_peers",
+          "default": "compare_to_peers",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "period_id",
+        "peer_definition_id"
+      ],
+      "title": "CompareToPeersArgs",
+      "type": "object"
+    },
+    "ComparisonDetail": {
+      "additionalProperties": false,
+      "description": "Required on ``comparison`` facts; computed by code, never the model.",
+      "properties": {
+        "difference": {
+          "anyOf": [
+            {
+              "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Difference"
+        },
+        "difference_unit": {
+          "$ref": "#/$defs/Unit"
+        },
+        "left_fact_id": {
+          "pattern": "^F_[0-9a-f]{16}$",
+          "title": "Left Fact Id",
+          "type": "string"
+        },
+        "matching_keys": {
+          "items": {
+            "$ref": "#/$defs/Dimension"
+          },
+          "title": "Matching Keys",
+          "type": "array"
+        },
+        "ratio": {
+          "anyOf": [
+            {
+              "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ratio"
+        },
+        "relation": {
+          "$ref": "#/$defs/Relation"
+        },
+        "right_fact_id": {
+          "pattern": "^F_[0-9a-f]{16}$",
+          "title": "Right Fact Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "left_fact_id",
+        "right_fact_id",
+        "matching_keys",
+        "relation",
+        "difference",
+        "ratio",
+        "difference_unit"
+      ],
+      "title": "ComparisonDetail",
+      "type": "object"
+    },
+    "CoverageStatus": {
+      "description": "Daily exports cannot prove completeness, so nothing is ever ``complete``.",
+      "enum": [
+        "unverified",
+        "possibly_incomplete",
+        "insufficient_data",
+        "externally_verified"
+      ],
+      "title": "CoverageStatus",
+      "type": "string"
+    },
+    "DailyTrendArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "tool": {
+          "const": "daily_trend",
+          "default": "daily_trend",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "period_id"
+      ],
+      "title": "DailyTrendArgs",
+      "type": "object"
+    },
+    "Dimension": {
+      "description": "The five approved segment dimensions; also the drill-down ``by`` values.",
+      "enum": [
+        "supply_id",
+        "country",
+        "size",
+        "placement_type",
+        "device_type"
+      ],
+      "title": "Dimension",
+      "type": "string"
+    },
+    "Fact": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComparisonDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fact_id": {
+          "pattern": "^F_[0-9a-f]{16}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FactKind"
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricKey"
+        },
+        "period": {
+          "$ref": "#/$defs/Period"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "run_namespace": {
+          "pattern": "^N_[0-9a-f]{16}$",
+          "title": "Run Namespace",
+          "type": "string"
+        },
+        "segment": {
+          "$ref": "#/$defs/Segment"
+        },
+        "unit": {
+          "$ref": "#/$defs/Unit"
+        },
+        "validity": {
+          "$ref": "#/$defs/Validity"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "fact_id",
+        "run_namespace",
+        "kind",
+        "segment",
+        "period",
+        "metric",
+        "value",
+        "unit",
+        "validity",
+        "provenance"
+      ],
+      "title": "Fact",
+      "type": "object"
+    },
+    "FactKind": {
+      "enum": [
+        "measured",
+        "calculated",
+        "comparison",
+        "quality",
+        "scenario"
+      ],
+      "title": "FactKind",
+      "type": "string"
+    },
+    "InputColumn": {
+      "description": "The 17 required header names of the daily export, in file order.",
+      "enum": [
+        "Day",
+        "Supply ID",
+        "Country",
+        "Size",
+        "Placement Type",
+        "Device Type",
+        "Demand Requests",
+        "Demand Responses",
+        "Our Bidfloor",
+        "Demand Bidprice",
+        "Demand sRPM $",
+        "Demand Wins",
+        "Supply Impressions",
+        "Revenue",
+        "Cost",
+        "Demand eCPM",
+        "Profit $"
+      ],
+      "title": "InputColumn",
+      "type": "string"
+    },
+    "MetricKey": {
+      "description": "Metric identifiers carried by facts. Rates are always ratios of sums.",
+      "enum": [
+        "requests",
+        "responses",
+        "wins",
+        "impressions",
+        "revenue",
+        "cost",
+        "profit",
+        "response_rate",
+        "win_rate",
+        "impression_to_win_rate",
+        "ecpm",
+        "revenue_per_million_requests",
+        "profit_per_million_requests",
+        "margin",
+        "request_share",
+        "revenue_share",
+        "profit_share",
+        "request_weighted_floor",
+        "response_weighted_bid",
+        "daily_change",
+        "profit_reconciliation_residual",
+        "row_count",
+        "observed_days"
+      ],
+      "title": "MetricKey",
+      "type": "string"
+    },
+    "Period": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage_status": {
+          "$ref": "#/$defs/CoverageStatus"
+        },
+        "end": {
+          "format": "date",
+          "title": "End",
+          "type": "string"
+        },
+        "included_dates": {
+          "items": {
+            "format": "date",
+            "type": "string"
+          },
+          "title": "Included Dates",
+          "type": "array"
+        },
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "start": {
+          "format": "date",
+          "title": "Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "period_id",
+        "start",
+        "end",
+        "included_dates",
+        "coverage_status"
+      ],
+      "title": "Period",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation_keys": {
+          "items": {
+            "$ref": "#/$defs/Dimension"
+          },
+          "title": "Aggregation Keys",
+          "type": "array"
+        },
+        "formula_id": {
+          "pattern": "^[a-z0-9_]+_v[0-9]+$",
+          "title": "Formula Id",
+          "type": "string"
+        },
+        "input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "parent_fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Parent Fact Ids",
+          "type": "array"
+        },
+        "quality_issue_ids": {
+          "items": {
+            "pattern": "^Q_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Quality Issue Ids",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1",
+          "default": "1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_columns": {
+          "items": {
+            "$ref": "#/$defs/InputColumn"
+          },
+          "title": "Source Columns",
+          "type": "array"
+        },
+        "source_line_ranges_ref": {
+          "pattern": "^private_rows_[0-9a-f]{16}$",
+          "title": "Source Line Ranges Ref",
+          "type": "string"
+        },
+        "source_row_set_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Row Set Hash",
+          "type": "string"
+        },
+        "weighting": {
+          "$ref": "#/$defs/Weighting"
+        }
+      },
+      "required": [
+        "input_sha256",
+        "formula_id",
+        "source_columns",
+        "source_row_set_hash",
+        "source_line_ranges_ref",
+        "parent_fact_ids",
+        "aggregation_keys",
+        "weighting",
+        "quality_issue_ids"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "Relation": {
+      "description": "Direction of a comparison fact, computed by code.",
+      "enum": [
+        "greater",
+        "less",
+        "equal",
+        "undefined"
+      ],
+      "title": "Relation",
+      "type": "string"
+    },
+    "Segment": {
+      "additionalProperties": false,
+      "description": "An observed group. ``filters`` hold raw labels and are private data.",
+      "properties": {
+        "cohort_id": {
+          "default": "full_input",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Cohort Id",
+          "type": "string"
+        },
+        "filters": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/Dimension"
+          },
+          "title": "Filters",
+          "type": "object"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "filters"
+      ],
+      "title": "Segment",
+      "type": "object"
+    },
+    "Unit": {
+      "description": "Units of fact and assumption values. No ISO currency is ever asserted.",
+      "enum": [
+        "count",
+        "fraction",
+        "ratio",
+        "export_dollar",
+        "export_dollar_per_thousand_impressions",
+        "export_dollar_per_million_requests",
+        "export_price_as_exported",
+        "percentage_points",
+        "days"
+      ],
+      "title": "Unit",
+      "type": "string"
+    },
+    "Validity": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "$ref": "#/$defs/ValidityStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "Validity",
+      "type": "object"
+    },
+    "ValidityStatus": {
+      "enum": [
+        "valid",
+        "undefined",
+        "invalid",
+        "tainted"
+      ],
+      "title": "ValidityStatus",
+      "type": "string"
+    },
+    "Weighting": {
+      "enum": [
+        "sum",
+        "ratio_of_sums",
+        "request_weighted",
+        "response_weighted",
+        "not_applicable"
+      ],
+      "title": "Weighting",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/tool_evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "appended_facts": {
+      "items": {
+        "$ref": "#/$defs/Fact"
+      },
+      "title": "Appended Facts",
+      "type": "array"
+    },
+    "coverage_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Coverage Fact Ids",
+      "type": "array"
+    },
+    "other_bucket_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Other Bucket Fact Ids",
+      "type": "array"
+    },
+    "quality_issue_ids": {
+      "items": {
+        "pattern": "^Q_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Quality Issue Ids",
+      "type": "array"
+    },
+    "returned_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Returned Fact Ids",
+      "type": "array"
+    },
+    "run_namespace": {
+      "pattern": "^N_[0-9a-f]{16}$",
+      "title": "Run Namespace",
+      "type": "string"
+    },
+    "tool_call": {
+      "discriminator": {
+        "mapping": {
+          "breakdown": "#/$defs/BreakdownArgs",
+          "compare_to_peers": "#/$defs/CompareToPeersArgs",
+          "daily_trend": "#/$defs/DailyTrendArgs"
+        },
+        "propertyName": "tool"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/BreakdownArgs"
+        },
+        {
+          "$ref": "#/$defs/DailyTrendArgs"
+        },
+        {
+          "$ref": "#/$defs/CompareToPeersArgs"
+        }
+      ],
+      "title": "Tool Call"
+    },
+    "tool_invocation_id": {
+      "pattern": "^T_[0-9a-f]{16}$",
+      "title": "Tool Invocation Id",
+      "type": "string"
+    },
+    "tool_version": {
+      "maxLength": 32,
+      "minLength": 1,
+      "title": "Tool Version",
+      "type": "string"
+    },
+    "truncated": {
+      "title": "Truncated",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "tool_invocation_id",
+    "run_namespace",
+    "tool_call",
+    "tool_version",
+    "coverage_fact_ids",
+    "returned_fact_ids",
+    "appended_facts",
+    "other_bucket_fact_ids",
+    "truncated",
+    "quality_issue_ids"
+  ],
+  "title": "ToolEvidence",
+  "type": "object",
+  "x-schema-version": "1"
+}

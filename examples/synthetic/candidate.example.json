@@ -1,0 +1,18 @@
+{
+  "candidate_id": "C_c744008c453cdbf0",
+  "counter_evidence_fact_ids": [],
+  "daily_fact_ids": [],
+  "eligibility": "eligible",
+  "family": "scale_winner",
+  "overlap_group_ids": [],
+  "peer_fact_ids": [],
+  "period_id": "P_7164c90f00f0dcea",
+  "quality_issue_ids": [
+    "Q_8d0f815fa3df8839"
+  ],
+  "rejection_reason": null,
+  "segment_id": "G_710d1372b8ab8813",
+  "trigger_fact_ids": [
+    "F_426b7bf42825defb"
+  ]
+}

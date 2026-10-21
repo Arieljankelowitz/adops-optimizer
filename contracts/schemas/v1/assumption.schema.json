@@ -1,0 +1,137 @@
+{
+  "$defs": {
+    "AssumptionBounds": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum": {
+          "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "title": "Maximum",
+          "type": "string"
+        },
+        "minimum": {
+          "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "title": "Minimum",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minimum",
+        "maximum"
+      ],
+      "title": "AssumptionBounds",
+      "type": "object"
+    },
+    "AssumptionSelector": {
+      "enum": [
+        "default_test_template",
+        "user"
+      ],
+      "title": "AssumptionSelector",
+      "type": "string"
+    },
+    "Unit": {
+      "description": "Units of fact and assumption values. No ISO currency is ever asserted.",
+      "enum": [
+        "count",
+        "fraction",
+        "ratio",
+        "export_dollar",
+        "export_dollar_per_thousand_impressions",
+        "export_dollar_per_million_requests",
+        "export_price_as_exported",
+        "percentage_points",
+        "days"
+      ],
+      "title": "Unit",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/assumption.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A test parameter. Never historical evidence; rendered in its own list.",
+  "properties": {
+    "assumption_id": {
+      "pattern": "^A_[0-9a-f]{16}$",
+      "title": "Assumption Id",
+      "type": "string"
+    },
+    "bounds": {
+      "$ref": "#/$defs/AssumptionBounds"
+    },
+    "dependency_ids": {
+      "items": {
+        "pattern": "^A_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Dependency Ids",
+      "type": "array"
+    },
+    "label": {
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Label",
+      "type": "string"
+    },
+    "not_observed": {
+      "const": true,
+      "default": true,
+      "title": "Not Observed",
+      "type": "boolean"
+    },
+    "parameter_key": {
+      "pattern": "^[a-z0-9_]+$",
+      "title": "Parameter Key",
+      "type": "string"
+    },
+    "period_id": {
+      "pattern": "^P_[0-9a-f]{16}$",
+      "title": "Period Id",
+      "type": "string"
+    },
+    "rationale": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "run_namespace": {
+      "pattern": "^N_[0-9a-f]{16}$",
+      "title": "Run Namespace",
+      "type": "string"
+    },
+    "segment_id": {
+      "pattern": "^G_[0-9a-f]{16}$",
+      "title": "Segment Id",
+      "type": "string"
+    },
+    "selector": {
+      "$ref": "#/$defs/AssumptionSelector"
+    },
+    "unit": {
+      "$ref": "#/$defs/Unit"
+    },
+    "value": {
+      "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+      "title": "Value",
+      "type": "string"
+    }
+  },
+  "required": [
+    "assumption_id",
+    "run_namespace",
+    "label",
+    "parameter_key",
+    "value",
+    "unit",
+    "bounds",
+    "rationale",
+    "selector",
+    "segment_id",
+    "period_id",
+    "dependency_ids"
+  ],
+  "title": "Assumption",
+  "type": "object",
+  "x-schema-version": "1"
+}
