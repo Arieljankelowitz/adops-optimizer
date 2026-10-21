@@ -100,8 +100,30 @@ class MetricKey(StrEnum):
     DAILY_CHANGE = "daily_change"
     # Reconciliation and coverage statistics used by quality rules.
     PROFIT_RECONCILIATION_RESIDUAL = "profit_reconciliation_residual"
+    RECONCILIATION_BOUND = "reconciliation_bound"
     ROW_COUNT = "row_count"
+    ROW_SHARE = "row_share"
+    IMPRESSION_SHARE = "impression_share"
     OBSERVED_DAYS = "observed_days"
+    REVENUE_POSITIVE_DAYS = "revenue_positive_days"
+    MISSING_DAYS = "missing_days"
+    # Day value divided by the median of the other observed days.
+    DAY_REQUEST_RATIO = "day_request_ratio"
+    DAY_REVENUE_RATIO = "day_revenue_ratio"
+    SLICE_DROP_SHARE = "slice_drop_share"
+    ADJACENT_DAY_YIELD_RATIO = "adjacent_day_yield_ratio"
+    MAX_DAY_REVENUE_SHARE = "max_day_revenue_share"
+    TOP_TWO_DAY_REVENUE_SHARE = "top_two_day_revenue_share"
+    MAX_DAY_PROFIT_SHARE = "max_day_profit_share"
+    TOP_TWO_DAY_PROFIT_SHARE = "top_two_day_profit_share"
+    SRPM_MATCH_SHARE = "srpm_match_share"
+    SRPM_ERROR_RATIO = "srpm_error_ratio"
+    ECPM_MISMATCH_SHARE = "ecpm_mismatch_share"
+    COUNTER_GRANULARITY = "counter_granularity"
+    GRANULARITY_COVERAGE = "granularity_coverage"
+    ZERO_BID_RESPONSE_SHARE = "zero_bid_response_share"
+    BID_BELOW_FLOOR_RESPONSE_SHARE = "bid_below_floor_response_share"
+    ZERO_FLOOR_REQUEST_SHARE = "zero_floor_request_share"
 
 
 class Unit(StrEnum):

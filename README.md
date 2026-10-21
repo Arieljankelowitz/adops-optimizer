@@ -16,10 +16,42 @@ generated synthetic data is.
 
 ## Status
 
-Frozen contracts, a synthetic data generator, the self-hosted model
+Implemented: frozen contracts, the strict CSV loader and the data-quality
+module (rules DQ01-DQ20), a synthetic data generator, the self-hosted model
 deployment (`deploy/`, see `deploy/README.md`) and its fail-closed client
-(`llm/client.py`). The pipeline, model reasoning, report and app are not
-implemented yet; their functions raise `NotImplementedError`.
+(`llm/client.py`). Aggregation, detectors, evidence, model reasoning, report
+and app are not implemented yet; their functions raise `NotImplementedError`.
+
+## Loading and data quality
+
+```python
+from contracts.config import InputConfig, QualityConfig
+from pipeline.load import load_csv
+from pipeline.quality import assess_quality, render_message
+
+with open("export.csv", "rb") as source:
+    data = load_csv(source, InputConfig())
+report = assess_quality(data, QualityConfig())
+facts = {f.fact_id: f for f in report.facts}
+for issue in report.issues:
+    print(issue.severity, render_message(issue, facts))
+```
+
+- `load_csv` hashes the bytes, enforces size and row bounds, requires the 17
+  header names (extra columns are ignored and reported), parses dates
+  strictly, keeps Supply ID as an opaque string and keeps numbers as exact
+  decimals. A cell it cannot parse becomes `None` and is recorded in
+  `parse_audit`; nothing is coerced to zero and no row is dropped.
+- `assess_quality` runs the first pass (file, schema, counters, money,
+  rates, account-day coverage). `refine_quality` adds candidate coverage,
+  concentration, spike, materiality and peer checks once candidates exist; it
+  only appends.
+- Each rule reports `triggered`, `not_triggered` or `not_testable` (never a
+  pass on insufficient evidence). Issues carry a severity (`fatal` blocks
+  model recommendations), inference restrictions and fact references; the
+  message text is rendered by code from those facts.
+- Thresholds are defaults in `QualityConfig` (`contracts/config.py`) and part
+  of the configuration hash.
 
 ## Layout
 
@@ -32,7 +64,8 @@ contracts/          shared data contracts (pydantic v2)
   runtime.py        in-process types: loaded data, metrics store, registries, model/tool protocols
   templates.py      observation templates and reviewed qualitative codes
   schemas/v1/       exported JSON Schemas (generated)
-pipeline/           load, quality, metrics, detectors, scenarios, evidence (stubs)
+pipeline/           load and quality (implemented); metrics, detectors, scenarios,
+                    evidence (stubs); scope.py shared segment/period IDs
 llm/                client, profiles, prompts, analysis, tools, ranking, validator
 report/             report rendering (stub)
 deploy/             self-hosted vLLM serving on Modal

@@ -241,6 +241,9 @@ class QualityReport(Contract):
     config_hash: Sha256
     rule_results: list[QualityRuleResult]
     issues: list[QualityIssue]
+    # Provisional quality facts the issues reference; the evidence builder
+    # promotes them into the immutable registry unchanged.
+    facts: list[Fact] = Field(default_factory=list)
 
     @property
     def has_fatal(self) -> bool:

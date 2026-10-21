@@ -9,6 +9,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Literal, Protocol
 
@@ -101,9 +102,52 @@ class PrecisionMetadata:
     rate_quantum: Decimal
 
 
+class FileError(StrEnum):
+    """File-level failures that leave no interpretable rows (all DQ01 fatal)."""
+
+    EMPTY_FILE = "empty_file"
+    UNDECODABLE = "undecodable"
+    MALFORMED_CSV = "malformed_csv"
+    NO_DATA_ROWS = "no_data_rows"
+    MISSING_COLUMNS = "missing_columns"
+    DUPLICATE_COLUMNS = "duplicate_columns"
+    BYTE_LIMIT = "byte_limit"
+    ROW_LIMIT = "row_limit"
+
+
+@dataclass(frozen=True)
+class ParseAudit:
+    """What the loader could not interpret; quality rules turn it into issues."""
+
+    file_errors: tuple[FileError, ...] = ()
+    missing_columns: tuple[str, ...] = ()
+    duplicate_columns: tuple[str, ...] = ()
+    extra_columns: tuple[str, ...] = ()
+    byte_count: int = 0
+    # Source lines whose field count differs from the header; not in the frame.
+    malformed_lines: tuple[int, ...] = ()
+    # Column name -> frame indices whose cell failed strict parsing (value is None).
+    invalid_cells: Mapping[str, tuple[int, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    # Frame indices whose Day cell is blank.
+    missing_dates: tuple[int, ...] = ()
+    # Label the loader gave blank dimension cells.
+    unknown_dimension_label: str = "UNKNOWN"
+
+    @property
+    def readable(self) -> bool:
+        return not self.file_errors
+
+
 @dataclass(frozen=True)
 class LoadedData:
-    """Parsed export. ``frame`` keeps one row per source line, labels as strings."""
+    """Parsed export. ``frame`` keeps one row per source line, labels as strings.
+
+    Columns are the 17 required header names. ``Day`` holds ``datetime.date``,
+    dimensions hold whitespace-normalized strings, numeric columns hold exact
+    ``Decimal`` values; a cell that failed parsing is ``None``, never zero.
+    """
 
     frame: pd.DataFrame
     input_sha256: str
@@ -113,6 +157,10 @@ class LoadedData:
     normalization_audit: Mapping[str, Mapping[str, tuple[str, ...]]]
     precision: PrecisionMetadata
     dates: tuple[date, ...]
+    parse_audit: ParseAudit = field(default_factory=ParseAudit)
+    # Set by the runner to bind every stage to one run namespace; when None,
+    # quality derives it from the input hash and the quality config hash.
+    run_namespace: str | None = None
 
 
 @dataclass(frozen=True)
