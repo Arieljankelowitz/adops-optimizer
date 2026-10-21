@@ -1,0 +1,101 @@
+# Self-hosted model profiles: every model-specific setting lives here.
+#
+# `active_profile` selects the entry that deploy/modal_vllm.py serves and that
+# llm/client.py talks to. Switching profiles is an explicit edit here; nothing
+# substitutes another model silently. Loaded and validated by llm/profiles.py.
+#
+# Profile fields:
+#   status          serving_smoke_tested: served on the pinned stack and answered
+#                   test questions; untested: never served. Neither means the
+#                   synthetic acceptance tests have passed.
+#   image_digest    REQUIRED_AFTER_COMPATIBILITY_TEST until the serving image is
+#                   locked after acceptance.
+#   auto_tool_choice  native tool-call dispatch (--enable-auto-tool-choice with
+#                   tool_call_parser) stays off until that parser passes the
+#                   tool tests; the schema-based tool-request loop is used instead.
+
+active_profile: qwen38_fp8_l40s_v1
+
+profiles:
+  qwen38_fp8_l40s_v1:
+    status: serving_smoke_tested
+    model_id: Qwen/Qwen3.8-27B-FP8
+    model_revision: 017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+    served_model_name: adops-analysis
+    license: Apache-2.0
+    quantization: official_checkpoint_fp8
+    vllm_version: 0.32.0
+    # vLLM 0.32.0 requires transformers >=5.16.1,<5.20.
+    transformers_version: 5.19.0
+    image_digest: REQUIRED_AFTER_COMPATIBILITY_TEST
+    gpu: L40S
+    tensor_parallel_size: 1
+    text_only: true
+    max_model_len: 16384
+    max_num_seqs: 1
+    gpu_memory_utilization: 0.88
+    enforce_eager: true
+    max_prompt_tokens: 12288
+    max_output_tokens: 2048
+    temperature: 0.2
+    # Sent as chat_template_kwargs.enable_thinking on every request. With
+    # thinking on, reasoning can use the whole output budget and leave no answer.
+    enable_thinking: false
+    reasoning_parser: qwen3
+    tool_call_parser: qwen3_coder
+    auto_tool_choice: false
+    manual_tool_request_json_fallback: true
+
+  # Low-change contingency: same GPU and task contract, its own pinned revision.
+  qwen36_fp8_l40s_v1:
+    status: untested
+    model_id: Qwen/Qwen3.6-27B-FP8
+    model_revision: e89b16ebf1988b3d6befa7de50abc2d76f26eb09
+    served_model_name: adops-analysis
+    license: Apache-2.0
+    quantization: official_checkpoint_fp8
+    vllm_version: 0.32.0
+    transformers_version: 5.19.0
+    image_digest: REQUIRED_AFTER_COMPATIBILITY_TEST
+    gpu: L40S
+    tensor_parallel_size: 1
+    text_only: true
+    max_model_len: 16384
+    max_num_seqs: 1
+    gpu_memory_utilization: 0.88
+    enforce_eager: true
+    max_prompt_tokens: 12288
+    max_output_tokens: 2048
+    temperature: 0.2
+    enable_thinking: false
+    reasoning_parser: qwen3
+    tool_call_parser: qwen3_coder
+    auto_tool_choice: false
+    manual_tool_request_json_fallback: true
+
+  # Cheaper fallback: smaller BF16 model on a 24 GB A10 with an 8K context.
+  granite42_8b_a10_v1:
+    status: untested
+    model_id: ibm-granite/granite-4.2-8b
+    model_revision: f8de16cdcdbc6c779ca517604e050d82cc119e44
+    served_model_name: adops-analysis
+    license: Apache-2.0
+    quantization: official_checkpoint_bf16
+    vllm_version: 0.32.0
+    transformers_version: 5.19.0
+    image_digest: REQUIRED_AFTER_COMPATIBILITY_TEST
+    gpu: A10
+    tensor_parallel_size: 1
+    text_only: true
+    max_model_len: 8192
+    max_num_seqs: 1
+    gpu_memory_utilization: 0.90
+    enforce_eager: true
+    max_prompt_tokens: 6144
+    max_output_tokens: 1024
+    temperature: 0.2
+    enable_thinking: false
+    reasoning_parser: null
+    tool_call_parser: null
+    auto_tool_choice: false
+    manual_tool_request_json_fallback: true

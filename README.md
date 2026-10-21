@@ -16,8 +16,9 @@ generated synthetic data is.
 
 ## Status
 
-Foundation only: frozen contracts, module stubs, a synthetic data generator
-and interface tests. The pipeline, model client, deployment and app are not
+Frozen contracts, a synthetic data generator, the self-hosted model
+deployment (`deploy/`, see `deploy/README.md`) and its fail-closed client
+(`llm/client.py`). The pipeline, model reasoning, report and app are not
 implemented yet; their functions raise `NotImplementedError`.
 
 ## Layout
@@ -32,10 +33,10 @@ contracts/          shared data contracts (pydantic v2)
   templates.py      observation templates and reviewed qualitative codes
   schemas/v1/       exported JSON Schemas (generated)
 pipeline/           load, quality, metrics, detectors, scenarios, evidence (stubs)
-llm/                client, prompts, analysis, tools, ranking, validator (stubs)
+llm/                client, profiles, prompts, analysis, tools, ranking, validator
 report/             report rendering (stub)
-deploy/             self-hosted model serving (placeholder)
-config/             run configuration files (added by later lanes)
+deploy/             self-hosted vLLM serving on Modal
+config/             run configuration files; model_profiles.yaml holds every model setting
 runner.py, cli.py, app.py   orchestration and entry points (stubs)
 scripts/
   generate_synthetic.py   seeded synthetic export with planted data-quality traps
@@ -60,7 +61,8 @@ uv run pytest
 ```
 
 Live tests are deselected by default; run them explicitly with
-`uv run pytest -m live` once an endpoint is configured (see `.env.example`).
+`uv run pytest -m live` once an endpoint is configured (see `.env.example`
+and `deploy/README.md`).
 
 ## Synthetic data
 
