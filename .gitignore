@@ -39,6 +39,7 @@ private/
 
 # Private run bundle file names, wherever they land (synthetic examples excepted)
 manifest.json
+run.json
 quality.json
 facts.json
 assumptions.json

@@ -114,9 +114,11 @@ def test_breakdown_default_limit() -> None:
     assert inspect.signature(tools.breakdown).parameters["limit"].default == 10
 
 
+# Implemented lanes leave this list; their own tests cover behaviour.
 IMPLEMENTED = {
     load.load_csv, quality.assess_quality, quality.refine_quality,
     metrics.aggregate, detectors.detect_opportunities, scenarios.compute_scenarios,
+    render.render_report, runner.run_pipeline,
 }
 STUBS = [(f, e) for f, e in EXPECTED if f not in IMPLEMENTED]
 

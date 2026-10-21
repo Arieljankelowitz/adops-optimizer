@@ -17,10 +17,11 @@ import pandas as pd
 from pydantic import Field
 
 from contracts.config import RunConfig
-from contracts.enums import ToolName
+from contracts.enums import RunStatus, ToolName
 from contracts.models import (
     Assumption,
     Candidate,
+    CandidateAnalysis,
     CandidatePack,
     Contract,
     Fact,
@@ -34,6 +35,7 @@ from contracts.models import (
     ToolCall,
     ToolEvidence,
     ValidatedRecommendation,
+    ValidationIssue,
 )
 
 
@@ -212,6 +214,13 @@ class ValidatedRun:
     bundle: EvidenceBundle
     recommendations: tuple[ValidatedRecommendation, ...]
     ranking: RankingIR | None
+    # Run outcome and audit trail for the report header and exclusions section.
+    status: RunStatus = RunStatus.FINAL
+    analyses: tuple[CandidateAnalysis, ...] = ()
+    # Candidate ID (or "ranking") -> machine-readable reasons its output was rejected.
+    validation_failures: Mapping[str, tuple[ValidationIssue, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 # --- Model transport -------------------------------------------------------
