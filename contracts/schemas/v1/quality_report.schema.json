@@ -234,6 +234,7 @@
         "profit_share",
         "request_weighted_floor",
         "response_weighted_bid",
+        "response_weighted_floor",
         "daily_change",
         "profit_reconciliation_residual",
         "reconciliation_bound",

@@ -97,6 +97,8 @@ class MetricKey(StrEnum):
     PROFIT_SHARE = "profit_share"
     REQUEST_WEIGHTED_FLOOR = "request_weighted_floor"
     RESPONSE_WEIGHTED_BID = "response_weighted_bid"
+    # Floor weighted by responses; paired with the bid on the same population.
+    RESPONSE_WEIGHTED_FLOOR = "response_weighted_floor"
     DAILY_CHANGE = "daily_change"
     # Reconciliation and coverage statistics used by quality rules.
     PROFIT_RECONCILIATION_RESIDUAL = "profit_reconciliation_residual"

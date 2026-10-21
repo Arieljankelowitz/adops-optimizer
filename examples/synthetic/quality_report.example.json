@@ -1,5 +1,5 @@
 {
-  "config_hash": "41a2ef71c181e71942e6621214bbd89a5a6acb0411676692c8c2854ca58a1840",
+  "config_hash": "40e1cf23886683982281e8396d67d480ea26dcdd9851fe75c7f84ca78417675d",
   "facts": [],
   "issues": [
     {
@@ -7,25 +7,25 @@
       "inference_restrictions": [
         "no_trend_claim"
       ],
-      "issue_id": "Q_8e3b57f0039ca71f",
+      "issue_id": "Q_15ae1c73bc0d5fb9",
       "measured_fact_ids": [
-        "F_6ae31ea2db4e9979"
+        "F_870be63951af4989"
       ],
       "message_template_id": "DQ06_possible_partial_day",
       "period_ids": [
-        "P_db3a9fe82cc330fe"
+        "P_4e55340e284b3f3f"
       ],
-      "request_exposure_fact_id": "F_393009be766f9e62",
-      "revenue_exposure_fact_id": "F_65b6e12d31829214",
+      "request_exposure_fact_id": "F_694e041d462641cf",
+      "revenue_exposure_fact_id": "F_6b51f887314f8901",
       "row_count": 38,
       "rule_id": "DQ06",
       "rule_version": 1,
       "segment_ids": [
-        "G_b033aa982a6267e9"
+        "G_03ca3f69a041be5e"
       ],
       "severity": "warning",
       "threshold_fact_ids": [
-        "F_fcd7c961dfbec6a8"
+        "F_bc717afab59aaba6"
       ]
     }
   ],
@@ -33,7 +33,7 @@
   "rule_results": [
     {
       "issue_ids": [
-        "Q_8e3b57f0039ca71f"
+        "Q_15ae1c73bc0d5fb9"
       ],
       "outcome": "triggered",
       "rule_id": "DQ06",
@@ -46,6 +46,6 @@
       "rule_version": 1
     }
   ],
-  "run_namespace": "N_f709e79515efce5d",
+  "run_namespace": "N_8faafa056fb7a5fd",
   "schema_version": "1"
 }

@@ -17,10 +17,18 @@ generated synthetic data is.
 ## Status
 
 Implemented: frozen contracts, the strict CSV loader and the data-quality
-module (rules DQ01-DQ20), a synthetic data generator, the self-hosted model
-deployment (`deploy/`, see `deploy/README.md`) and its fail-closed client
-(`llm/client.py`). Aggregation, detectors, evidence, model reasoning, report
-and app are not implemented yet; their functions raise `NotImplementedError`.
+module (rules DQ01-DQ20), the analytics engine (aggregation, all eight
+detector families and conditional scenarios), a synthetic data generator, the
+self-hosted model deployment (`deploy/`, see `deploy/README.md`) and its
+fail-closed client (`llm/client.py`). Evidence, model reasoning, report and app
+are not implemented yet; their functions raise `NotImplementedError`.
+
+Analytics (`pipeline/metrics.py`, `detectors.py`, `scenarios.py`): observed
+groups only, rates as ratios of sums with null-with-reason denominators,
+eligibility gates with 0.5x/2x sensitivity and a stability gate, candidates
+with daily, peer, coverage, concentration and contrary evidence plus an
+overlap graph, and code-only conditional scenarios. Thresholds are versioned
+defaults in `AnalyticsConfig` and `DetectorConfig`.
 
 ## Loading and data quality
 
@@ -64,8 +72,8 @@ contracts/          shared data contracts (pydantic v2)
   runtime.py        in-process types: loaded data, metrics store, registries, model/tool protocols
   templates.py      observation templates and reviewed qualitative codes
   schemas/v1/       exported JSON Schemas (generated)
-pipeline/           load and quality (implemented); metrics, detectors, scenarios,
-                    evidence (stubs); scope.py shared segment/period IDs
+pipeline/           load, quality, metrics, detectors, scenarios (implemented);
+                    evidence (stub); scope.py shared segment/period IDs
 llm/                client, profiles, prompts, analysis, tools, ranking, validator
 report/             report rendering (stub)
 deploy/             self-hosted vLLM serving on Modal

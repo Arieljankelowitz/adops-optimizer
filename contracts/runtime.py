@@ -176,6 +176,8 @@ class MetricsStore:
     quality_flags: Mapping[str, tuple[str, ...]] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    # Input hash for fact provenance; ``aggregate`` always sets it.
+    input_sha256: str | None = None
 
 
 @dataclass(frozen=True)

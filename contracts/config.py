@@ -77,26 +77,48 @@ class QualityConfig(Config):
 
 
 class AnalyticsConfig(Config):
+    analytics_version: int = Field(default=1, ge=1)
     min_requests: int = 10_000_000
     min_revenue: DecimalValue = Decimal("100")
     waste_min_requests: int = 100_000_000
     wins_min_wins: int = 1_000_000
     sensitivity_multipliers: tuple[DecimalValue, ...] = (Decimal("0.5"), Decimal("2"))
+    # Material candidates outside the gates, but above this fraction of them,
+    # are kept in a labelled exploratory table instead of being discarded.
+    exploratory_gate_fraction: DecimalValue = Decimal("0.1")
+    # Stability gate: observed and revenue-positive days, and no one/two-day
+    # concentration of positive revenue or profit.
+    min_stable_days: int = 4
+    concentration_min_positive: DecimalValue = Decimal("100")
+    concentration_max_day_share: DecimalValue = Decimal("0.6")
+    concentration_max_two_day_share: DecimalValue = Decimal("0.8")
 
 
 class DetectorConfig(Config):
+    detectors_version: int = Field(default=1, ge=1)
     scale_yield_multiple: DecimalValue = Decimal("2")
     scale_max_request_share: DecimalValue = Decimal("0.02")
     waste_max_revenue_per_million: DecimalValue = Decimal("0.05")
     margin_floor: DecimalValue = Decimal("0.25")
+    # Child margin this many fraction points below its parent excluding itself.
+    margin_disparity_points: DecimalValue = Decimal("0.15")
     high_bid_floor_ratio: DecimalValue = Decimal("2")
     low_bid_floor_ratio: DecimalValue = Decimal("0.9")
+    # Response or win rate at most this multiple of the matched peer's.
+    low_bid_peer_rate_ratio: DecimalValue = Decimal("0.5")
     impressions_per_win_floor: DecimalValue = Decimal("0.10")
     impressions_per_win_peer_ratio: DecimalValue = Decimal("0.5")
     trend_step_up: DecimalValue = Decimal("2")
     trend_step_down: DecimalValue = Decimal("0.5")
+    trend_min_day_requests: int = 1_000_000
+    trend_min_day_revenue: DecimalValue = Decimal("25")
+    trend_volume_multiple: DecimalValue = Decimal("3")
+    trend_min_usable_days: int = 4
     combination_multiple_up: DecimalValue = Decimal("2")
     combination_multiple_down: DecimalValue = Decimal("0.5")
+    # A same-family parent is rejected as a duplicate when one child candidate
+    # carries at least this share of its requests.
+    dedup_child_request_share: DecimalValue = Decimal("0.8")
 
 
 class EvidenceConfig(Config):
