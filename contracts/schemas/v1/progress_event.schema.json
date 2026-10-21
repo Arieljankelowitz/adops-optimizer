@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "ProgressStage": {
+      "enum": [
+        "load",
+        "initial_quality",
+        "aggregate",
+        "detect",
+        "refined_quality",
+        "evidence",
+        "model_readiness",
+        "candidate_analysis",
+        "tool_call",
+        "validation",
+        "ranking",
+        "render",
+        "complete"
+      ],
+      "title": "ProgressStage",
+      "type": "string"
+    },
+    "ProgressState": {
+      "enum": [
+        "started",
+        "succeeded",
+        "failed",
+        "skipped",
+        "cancelled"
+      ],
+      "title": "ProgressState",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/progress_event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "at": {
+      "format": "date-time",
+      "title": "At",
+      "type": "string"
+    },
+    "candidate_id": {
+      "anyOf": [
+        {
+          "pattern": "^C_[0-9a-f]{16}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Id"
+    },
+    "message_code": {
+      "pattern": "^[a-z0-9_]+$",
+      "title": "Message Code",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^run_[0-9a-f]{16}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "stage": {
+      "$ref": "#/$defs/ProgressStage"
+    },
+    "state": {
+      "$ref": "#/$defs/ProgressState"
+    }
+  },
+  "required": [
+    "run_id",
+    "stage",
+    "state",
+    "message_code",
+    "at"
+  ],
+  "title": "ProgressEvent",
+  "type": "object",
+  "x-schema-version": "1"
+}

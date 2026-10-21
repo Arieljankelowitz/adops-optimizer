@@ -1,0 +1,50 @@
+{
+  "config_hash": "189d8895e0c90426fb676562ada1f3eb196ac630015e8c3a8b239babcb4fb3bd",
+  "issues": [
+    {
+      "affected_candidate_ids": [],
+      "inference_restrictions": [
+        "no_trend_claim"
+      ],
+      "issue_id": "Q_8d0f815fa3df8839",
+      "measured_fact_ids": [
+        "F_477483c64e2217c7"
+      ],
+      "message_template_id": "DQ06_possible_partial_day",
+      "period_ids": [
+        "P_7164c90f00f0dcea"
+      ],
+      "request_exposure_fact_id": "F_559e99a48a35341a",
+      "revenue_exposure_fact_id": "F_3e7e1ef692d688b0",
+      "row_count": 38,
+      "rule_id": "DQ06",
+      "rule_version": 1,
+      "segment_ids": [
+        "G_ef7418c0bb7d254c"
+      ],
+      "severity": "warning",
+      "threshold_fact_ids": [
+        "F_ac28dd1ac3cd9779"
+      ]
+    }
+  ],
+  "quality_pass": "initial",
+  "rule_results": [
+    {
+      "issue_ids": [
+        "Q_8d0f815fa3df8839"
+      ],
+      "outcome": "triggered",
+      "rule_id": "DQ06",
+      "rule_version": 1
+    },
+    {
+      "issue_ids": [],
+      "outcome": "not_testable",
+      "rule_id": "DQ08",
+      "rule_version": 1
+    }
+  ],
+  "run_namespace": "N_2a4ded25dcce2c06",
+  "schema_version": "1"
+}

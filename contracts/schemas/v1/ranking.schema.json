@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "MergeInstruction": {
+      "additionalProperties": false,
+      "properties": {
+        "source_recommendation_ids": {
+          "items": {
+            "pattern": "^R_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Recommendation Ids",
+          "type": "array"
+        },
+        "target_recommendation_id": {
+          "pattern": "^R_[0-9a-f]{16}$",
+          "title": "Target Recommendation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_recommendation_id",
+        "source_recommendation_ids"
+      ],
+      "title": "MergeInstruction",
+      "type": "object"
+    },
+    "SummaryTheme": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "recommendation_ids": {
+          "items": {
+            "pattern": "^R_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Recommendation Ids",
+          "type": "array"
+        },
+        "theme_code": {
+          "$ref": "#/$defs/SummaryThemeCode"
+        }
+      },
+      "required": [
+        "theme_code",
+        "fact_ids",
+        "recommendation_ids"
+      ],
+      "title": "SummaryTheme",
+      "type": "object"
+    },
+    "SummaryThemeCode": {
+      "enum": [
+        "data_quality_limits",
+        "scale_opportunities",
+        "waste_reduction",
+        "margin_review",
+        "floor_investigation",
+        "delivery_reconciliation",
+        "trend_watch"
+      ],
+      "title": "SummaryThemeCode",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/ranking.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Final ranking output; it cannot rewrite evidence.",
+  "properties": {
+    "merge_instructions": {
+      "items": {
+        "$ref": "#/$defs/MergeInstruction"
+      },
+      "title": "Merge Instructions",
+      "type": "array"
+    },
+    "ranked_recommendation_ids": {
+      "items": {
+        "pattern": "^R_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Ranked Recommendation Ids",
+      "type": "array"
+    },
+    "summary_themes": {
+      "items": {
+        "$ref": "#/$defs/SummaryTheme"
+      },
+      "maxItems": 7,
+      "title": "Summary Themes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "ranked_recommendation_ids",
+    "merge_instructions",
+    "summary_themes"
+  ],
+  "title": "RankingIR",
+  "type": "object",
+  "x-schema-version": "1"
+}

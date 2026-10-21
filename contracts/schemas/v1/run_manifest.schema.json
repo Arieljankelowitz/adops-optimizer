@@ -1,0 +1,95 @@
+{
+  "$id": "adops-optimizer/contracts/v1/run_manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Links the private run bundle files by SHA-256. Contains no source path.",
+  "properties": {
+    "analytics_config_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Analytics Config Hash",
+      "type": "string"
+    },
+    "assumption_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Assumption Hash",
+      "type": "string"
+    },
+    "files": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Files",
+      "type": "object"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "input_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "model_profile_hash": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Model Profile Hash"
+    },
+    "prompt_hash": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Prompt Hash"
+    },
+    "run_id": {
+      "pattern": "^run_[0-9a-f]{16}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "run_namespace": {
+      "pattern": "^N_[0-9a-f]{16}$",
+      "title": "Run Namespace",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tool_version": {
+      "title": "Tool Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "run_namespace",
+    "input_sha256",
+    "analytics_config_hash",
+    "model_profile_hash",
+    "prompt_hash",
+    "tool_version",
+    "assumption_hash",
+    "generated_at",
+    "files"
+  ],
+  "title": "RunManifest",
+  "type": "object",
+  "x-schema-version": "1"
+}

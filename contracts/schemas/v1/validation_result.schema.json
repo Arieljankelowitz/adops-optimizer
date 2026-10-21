@@ -1,0 +1,542 @@
+{
+  "$defs": {
+    "CandidateRecommendation": {
+      "additionalProperties": false,
+      "description": "The model's per-candidate output: references and codes only.",
+      "properties": {
+        "assumption_ids": {
+          "items": {
+            "pattern": "^A_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Assumption Ids",
+          "type": "array"
+        },
+        "candidate_id": {
+          "pattern": "^C_[0-9a-f]{16}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "confidence_in_observation": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "counter_evidence_fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Counter Evidence Fact Ids",
+          "type": "array"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "hypothesis_codes": {
+          "items": {
+            "$ref": "#/$defs/HypothesisCode"
+          },
+          "maxItems": 4,
+          "title": "Hypothesis Codes",
+          "type": "array"
+        },
+        "merge_source_candidate_ids": {
+          "items": {
+            "pattern": "^C_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Merge Source Candidate Ids",
+          "type": "array"
+        },
+        "observation_statements": {
+          "items": {
+            "$ref": "#/$defs/ObservationStatement"
+          },
+          "maxItems": 8,
+          "title": "Observation Statements",
+          "type": "array"
+        },
+        "overlap_group_ids": {
+          "items": {
+            "pattern": "^O_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Overlap Group Ids",
+          "type": "array"
+        },
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "prerequisite_codes": {
+          "items": {
+            "$ref": "#/$defs/PrerequisiteCode"
+          },
+          "maxItems": 7,
+          "title": "Prerequisite Codes",
+          "type": "array"
+        },
+        "risk_codes": {
+          "items": {
+            "$ref": "#/$defs/RiskCode"
+          },
+          "maxItems": 7,
+          "title": "Risk Codes",
+          "type": "array"
+        },
+        "scenario_ids": {
+          "items": {
+            "pattern": "^S_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 4,
+          "title": "Scenario Ids",
+          "type": "array"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "success_metric_keys": {
+          "items": {
+            "$ref": "#/$defs/MetricKey"
+          },
+          "maxItems": 4,
+          "title": "Success Metric Keys",
+          "type": "array"
+        },
+        "test_template_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TestTemplateId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "candidate_id",
+        "decision",
+        "segment_id",
+        "period_id",
+        "observation_statements",
+        "counter_evidence_fact_ids",
+        "hypothesis_codes",
+        "test_template_id",
+        "assumption_ids",
+        "scenario_ids",
+        "prerequisite_codes",
+        "risk_codes",
+        "success_metric_keys",
+        "confidence_in_observation",
+        "overlap_group_ids"
+      ],
+      "title": "CandidateRecommendation",
+      "type": "object"
+    },
+    "Confidence": {
+      "description": "Confidence in the observed pattern, not in an intervention's effect.",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "Decision": {
+      "enum": [
+        "recommend_test",
+        "investigate_first",
+        "reject",
+        "merge"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "HypothesisCode": {
+      "enum": [
+        "traffic_mix_or_configuration_unverified",
+        "demand_quality_or_mix_unverified",
+        "floor_setting_unverified",
+        "rendering_or_counting_defect_unverified",
+        "commercial_terms_unverified",
+        "export_semantics_unverified",
+        "one_off_event_unverified"
+      ],
+      "title": "HypothesisCode",
+      "type": "string"
+    },
+    "MergeInstruction": {
+      "additionalProperties": false,
+      "properties": {
+        "source_recommendation_ids": {
+          "items": {
+            "pattern": "^R_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Recommendation Ids",
+          "type": "array"
+        },
+        "target_recommendation_id": {
+          "pattern": "^R_[0-9a-f]{16}$",
+          "title": "Target Recommendation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_recommendation_id",
+        "source_recommendation_ids"
+      ],
+      "title": "MergeInstruction",
+      "type": "object"
+    },
+    "MetricKey": {
+      "description": "Metric identifiers carried by facts. Rates are always ratios of sums.",
+      "enum": [
+        "requests",
+        "responses",
+        "wins",
+        "impressions",
+        "revenue",
+        "cost",
+        "profit",
+        "response_rate",
+        "win_rate",
+        "impression_to_win_rate",
+        "ecpm",
+        "revenue_per_million_requests",
+        "profit_per_million_requests",
+        "margin",
+        "request_share",
+        "revenue_share",
+        "profit_share",
+        "request_weighted_floor",
+        "response_weighted_bid",
+        "daily_change",
+        "profit_reconciliation_residual",
+        "row_count",
+        "observed_days"
+      ],
+      "title": "MetricKey",
+      "type": "string"
+    },
+    "ObservationStatement": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "template_id": {
+          "$ref": "#/$defs/ObservationTemplateId"
+        }
+      },
+      "required": [
+        "template_id",
+        "fact_ids"
+      ],
+      "title": "ObservationStatement",
+      "type": "object"
+    },
+    "ObservationTemplateId": {
+      "enum": [
+        "metric_value",
+        "metric_vs_baseline",
+        "trend",
+        "coverage",
+        "concentration"
+      ],
+      "title": "ObservationTemplateId",
+      "type": "string"
+    },
+    "PrerequisiteCode": {
+      "enum": [
+        "confirm_eligible_inventory",
+        "confirm_capacity",
+        "confirm_contract_terms",
+        "reconcile_counters_with_logs",
+        "obtain_bid_distributions",
+        "confirm_export_semantics",
+        "establish_concurrent_holdout"
+      ],
+      "title": "PrerequisiteCode",
+      "type": "string"
+    },
+    "RankingIR": {
+      "additionalProperties": false,
+      "description": "Final ranking output; it cannot rewrite evidence.",
+      "properties": {
+        "merge_instructions": {
+          "items": {
+            "$ref": "#/$defs/MergeInstruction"
+          },
+          "title": "Merge Instructions",
+          "type": "array"
+        },
+        "ranked_recommendation_ids": {
+          "items": {
+            "pattern": "^R_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Ranked Recommendation Ids",
+          "type": "array"
+        },
+        "summary_themes": {
+          "items": {
+            "$ref": "#/$defs/SummaryTheme"
+          },
+          "maxItems": 7,
+          "title": "Summary Themes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "ranked_recommendation_ids",
+        "merge_instructions",
+        "summary_themes"
+      ],
+      "title": "RankingIR",
+      "type": "object"
+    },
+    "RiskCode": {
+      "enum": [
+        "demand_saturation",
+        "displaced_profit_unknown",
+        "revenue_at_risk",
+        "partner_relationship",
+        "measurement_noise",
+        "one_off_concentration",
+        "counter_semantics_unknown"
+      ],
+      "title": "RiskCode",
+      "type": "string"
+    },
+    "SummaryTheme": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "recommendation_ids": {
+          "items": {
+            "pattern": "^R_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Recommendation Ids",
+          "type": "array"
+        },
+        "theme_code": {
+          "$ref": "#/$defs/SummaryThemeCode"
+        }
+      },
+      "required": [
+        "theme_code",
+        "fact_ids",
+        "recommendation_ids"
+      ],
+      "title": "SummaryTheme",
+      "type": "object"
+    },
+    "SummaryThemeCode": {
+      "enum": [
+        "data_quality_limits",
+        "scale_opportunities",
+        "waste_reduction",
+        "margin_review",
+        "floor_investigation",
+        "delivery_reconciliation",
+        "trend_watch"
+      ],
+      "title": "SummaryThemeCode",
+      "type": "string"
+    },
+    "TestTemplateId": {
+      "enum": [
+        "matched_allocation_holdout",
+        "targeted_throttle_holdout",
+        "floor_increase_randomized",
+        "floor_decrease_randomized",
+        "commercial_terms_review",
+        "counter_reconciliation",
+        "instrumentation_feasibility"
+      ],
+      "title": "TestTemplateId",
+      "type": "string"
+    },
+    "ValidatedRecommendation": {
+      "additionalProperties": false,
+      "properties": {
+        "recommendation": {
+          "$ref": "#/$defs/CandidateRecommendation"
+        },
+        "recommendation_id": {
+          "pattern": "^R_[0-9a-f]{16}$",
+          "title": "Recommendation Id",
+          "type": "string"
+        },
+        "run_namespace": {
+          "pattern": "^N_[0-9a-f]{16}$",
+          "title": "Run Namespace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recommendation_id",
+        "run_namespace",
+        "recommendation"
+      ],
+      "title": "ValidatedRecommendation",
+      "type": "object"
+    },
+    "ValidationAccepted": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "const": true,
+          "default": true,
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidatedRecommendation"
+            },
+            {
+              "$ref": "#/$defs/RankingIR"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "title": "ValidationAccepted",
+      "type": "object"
+    },
+    "ValidationErrorCode": {
+      "enum": [
+        "schema_invalid",
+        "unknown_reference",
+        "stale_namespace",
+        "wrong_metric",
+        "wrong_unit",
+        "wrong_segment",
+        "wrong_period",
+        "wrong_role",
+        "wrong_direction",
+        "invalid_denominator",
+        "quality_gate_violation",
+        "missing_counter_evidence",
+        "unapproved_template",
+        "assumption_out_of_bounds",
+        "scenario_mismatch",
+        "overlap_conflict",
+        "unsupported_claim"
+      ],
+      "title": "ValidationErrorCode",
+      "type": "string"
+    },
+    "ValidationIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ValidationErrorCode"
+        },
+        "detail": {
+          "maxLength": 300,
+          "title": "Detail",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 200,
+          "title": "Path",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        }
+      },
+      "required": [
+        "code",
+        "path",
+        "detail"
+      ],
+      "title": "ValidationIssue",
+      "type": "object"
+    },
+    "ValidationRejected": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "const": false,
+          "default": false,
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "errors": {
+          "items": {
+            "$ref": "#/$defs/ValidationIssue"
+          },
+          "minItems": 1,
+          "title": "Errors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "errors"
+      ],
+      "title": "ValidationRejected",
+      "type": "object"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/validation_result.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "discriminator": {
+    "mapping": {
+      "false": "#/$defs/ValidationRejected",
+      "true": "#/$defs/ValidationAccepted"
+    },
+    "propertyName": "accepted"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ValidationAccepted"
+    },
+    {
+      "$ref": "#/$defs/ValidationRejected"
+    }
+  ],
+  "x-schema-version": "1"
+}

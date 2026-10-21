@@ -1,0 +1,283 @@
+{
+  "$defs": {
+    "Confidence": {
+      "description": "Confidence in the observed pattern, not in an intervention's effect.",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "Decision": {
+      "enum": [
+        "recommend_test",
+        "investigate_first",
+        "reject",
+        "merge"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "HypothesisCode": {
+      "enum": [
+        "traffic_mix_or_configuration_unverified",
+        "demand_quality_or_mix_unverified",
+        "floor_setting_unverified",
+        "rendering_or_counting_defect_unverified",
+        "commercial_terms_unverified",
+        "export_semantics_unverified",
+        "one_off_event_unverified"
+      ],
+      "title": "HypothesisCode",
+      "type": "string"
+    },
+    "MetricKey": {
+      "description": "Metric identifiers carried by facts. Rates are always ratios of sums.",
+      "enum": [
+        "requests",
+        "responses",
+        "wins",
+        "impressions",
+        "revenue",
+        "cost",
+        "profit",
+        "response_rate",
+        "win_rate",
+        "impression_to_win_rate",
+        "ecpm",
+        "revenue_per_million_requests",
+        "profit_per_million_requests",
+        "margin",
+        "request_share",
+        "revenue_share",
+        "profit_share",
+        "request_weighted_floor",
+        "response_weighted_bid",
+        "daily_change",
+        "profit_reconciliation_residual",
+        "row_count",
+        "observed_days"
+      ],
+      "title": "MetricKey",
+      "type": "string"
+    },
+    "ObservationStatement": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "template_id": {
+          "$ref": "#/$defs/ObservationTemplateId"
+        }
+      },
+      "required": [
+        "template_id",
+        "fact_ids"
+      ],
+      "title": "ObservationStatement",
+      "type": "object"
+    },
+    "ObservationTemplateId": {
+      "enum": [
+        "metric_value",
+        "metric_vs_baseline",
+        "trend",
+        "coverage",
+        "concentration"
+      ],
+      "title": "ObservationTemplateId",
+      "type": "string"
+    },
+    "PrerequisiteCode": {
+      "enum": [
+        "confirm_eligible_inventory",
+        "confirm_capacity",
+        "confirm_contract_terms",
+        "reconcile_counters_with_logs",
+        "obtain_bid_distributions",
+        "confirm_export_semantics",
+        "establish_concurrent_holdout"
+      ],
+      "title": "PrerequisiteCode",
+      "type": "string"
+    },
+    "RiskCode": {
+      "enum": [
+        "demand_saturation",
+        "displaced_profit_unknown",
+        "revenue_at_risk",
+        "partner_relationship",
+        "measurement_noise",
+        "one_off_concentration",
+        "counter_semantics_unknown"
+      ],
+      "title": "RiskCode",
+      "type": "string"
+    },
+    "TestTemplateId": {
+      "enum": [
+        "matched_allocation_holdout",
+        "targeted_throttle_holdout",
+        "floor_increase_randomized",
+        "floor_decrease_randomized",
+        "commercial_terms_review",
+        "counter_reconciliation",
+        "instrumentation_feasibility"
+      ],
+      "title": "TestTemplateId",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/candidate_recommendation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The model's per-candidate output: references and codes only.",
+  "properties": {
+    "assumption_ids": {
+      "items": {
+        "pattern": "^A_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Assumption Ids",
+      "type": "array"
+    },
+    "candidate_id": {
+      "pattern": "^C_[0-9a-f]{16}$",
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "confidence_in_observation": {
+      "$ref": "#/$defs/Confidence"
+    },
+    "counter_evidence_fact_ids": {
+      "items": {
+        "pattern": "^F_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "maxItems": 12,
+      "title": "Counter Evidence Fact Ids",
+      "type": "array"
+    },
+    "decision": {
+      "$ref": "#/$defs/Decision"
+    },
+    "hypothesis_codes": {
+      "items": {
+        "$ref": "#/$defs/HypothesisCode"
+      },
+      "maxItems": 4,
+      "title": "Hypothesis Codes",
+      "type": "array"
+    },
+    "merge_source_candidate_ids": {
+      "items": {
+        "pattern": "^C_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Merge Source Candidate Ids",
+      "type": "array"
+    },
+    "observation_statements": {
+      "items": {
+        "$ref": "#/$defs/ObservationStatement"
+      },
+      "maxItems": 8,
+      "title": "Observation Statements",
+      "type": "array"
+    },
+    "overlap_group_ids": {
+      "items": {
+        "pattern": "^O_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Overlap Group Ids",
+      "type": "array"
+    },
+    "period_id": {
+      "pattern": "^P_[0-9a-f]{16}$",
+      "title": "Period Id",
+      "type": "string"
+    },
+    "prerequisite_codes": {
+      "items": {
+        "$ref": "#/$defs/PrerequisiteCode"
+      },
+      "maxItems": 7,
+      "title": "Prerequisite Codes",
+      "type": "array"
+    },
+    "risk_codes": {
+      "items": {
+        "$ref": "#/$defs/RiskCode"
+      },
+      "maxItems": 7,
+      "title": "Risk Codes",
+      "type": "array"
+    },
+    "scenario_ids": {
+      "items": {
+        "pattern": "^S_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "maxItems": 4,
+      "title": "Scenario Ids",
+      "type": "array"
+    },
+    "segment_id": {
+      "pattern": "^G_[0-9a-f]{16}$",
+      "title": "Segment Id",
+      "type": "string"
+    },
+    "success_metric_keys": {
+      "items": {
+        "$ref": "#/$defs/MetricKey"
+      },
+      "maxItems": 4,
+      "title": "Success Metric Keys",
+      "type": "array"
+    },
+    "test_template_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TestTemplateId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "candidate_id",
+    "decision",
+    "segment_id",
+    "period_id",
+    "observation_statements",
+    "counter_evidence_fact_ids",
+    "hypothesis_codes",
+    "test_template_id",
+    "assumption_ids",
+    "scenario_ids",
+    "prerequisite_codes",
+    "risk_codes",
+    "success_metric_keys",
+    "confidence_in_observation",
+    "overlap_group_ids"
+  ],
+  "title": "CandidateRecommendation",
+  "type": "object",
+  "x-schema-version": "1"
+}

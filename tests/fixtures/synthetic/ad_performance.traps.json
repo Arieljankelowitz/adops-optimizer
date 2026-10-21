@@ -1,0 +1,319 @@
+{
+  "seed": 20310303,
+  "synthetic": true,
+  "header": [
+    "Day",
+    "Supply ID",
+    "Country",
+    "Size",
+    "Placement Type",
+    "Device Type",
+    "Demand Requests",
+    "Demand Responses",
+    "Our Bidfloor",
+    "Demand Bidprice",
+    "Demand sRPM $",
+    "Demand Wins",
+    "Supply Impressions",
+    "Revenue",
+    "Cost",
+    "Demand eCPM",
+    "Profit $"
+  ],
+  "dates": [
+    "2031-03-03",
+    "2031-03-04",
+    "2031-03-05",
+    "2031-03-06",
+    "2031-03-07",
+    "2031-03-08",
+    "2031-03-09"
+  ],
+  "row_count": 274,
+  "partial_final_day": {
+    "day": "2031-03-09",
+    "request_factor": 0.3
+  },
+  "request_granularity": 1000,
+  "srpm_multiplier": 1000000,
+  "planted_slices": {
+    "wasted_requests": {
+      "key": {
+        "Supply ID": "60894",
+        "Country": "US",
+        "Size": "320x50",
+        "Placement Type": "Banner",
+        "Device Type": "Mobile"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": []
+    },
+    "scale_winner": {
+      "key": {
+        "Supply ID": "41022",
+        "Country": "DE",
+        "Size": "300x250",
+        "Placement Type": "Banner",
+        "Device Type": "Desktop"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": []
+    },
+    "two_day_spike": {
+      "key": {
+        "Supply ID": "52310",
+        "Country": "BR",
+        "Size": "728x90",
+        "Placement Type": "Banner",
+        "Device Type": "Desktop"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": [
+        "2031-03-05",
+        "2031-03-06"
+      ]
+    },
+    "negative_margin": {
+      "key": {
+        "Supply ID": "73005",
+        "Country": "IN",
+        "Size": "300x250",
+        "Placement Type": "Video",
+        "Device Type": "Mobile"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": []
+    },
+    "high_bid_floor": {
+      "key": {
+        "Supply ID": "88140",
+        "Country": "GB",
+        "Size": "300x600",
+        "Placement Type": "Banner",
+        "Device Type": "Desktop"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": []
+    },
+    "wins_impressions_gap": {
+      "key": {
+        "Supply ID": "07731",
+        "Country": "US",
+        "Size": "728x90",
+        "Placement Type": "Video",
+        "Device Type": "Tablet"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": []
+    },
+    "placeholder_size": {
+      "key": {
+        "Supply ID": "52311",
+        "Country": "US",
+        "Size": "9999x9999",
+        "Placement Type": "Banner",
+        "Device Type": "Mobile"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": []
+    },
+    "placeholder_country": {
+      "key": {
+        "Supply ID": "41007",
+        "Country": "-",
+        "Size": "300x250",
+        "Placement Type": "Banner",
+        "Device Type": "Mobile"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-04",
+        "2031-03-05",
+        "2031-03-06",
+        "2031-03-07",
+        "2031-03-08",
+        "2031-03-09"
+      ],
+      "spike_days": []
+    },
+    "intermittent": {
+      "key": {
+        "Supply ID": "88140",
+        "Country": "DE",
+        "Size": "320x50",
+        "Placement Type": "Banner",
+        "Device Type": "Mobile"
+      },
+      "days": [
+        "2031-03-03",
+        "2031-03-06",
+        "2031-03-08"
+      ],
+      "spike_days": []
+    }
+  },
+  "row_traps": {
+    "responses_over_requests": [
+      {
+        "Day": "2031-03-07",
+        "Supply ID": "52311",
+        "Country": "US",
+        "Size": "300x250",
+        "Placement Type": "Video",
+        "Device Type": "Tablet"
+      },
+      {
+        "Day": "2031-03-05",
+        "Supply ID": "52311",
+        "Country": "GB",
+        "Size": "728x90",
+        "Placement Type": "Video",
+        "Device Type": "Tablet"
+      },
+      {
+        "Day": "2031-03-05",
+        "Supply ID": "73005",
+        "Country": "IN",
+        "Size": "728x90",
+        "Placement Type": "Video",
+        "Device Type": "Tablet"
+      }
+    ],
+    "impressions_without_requests": [
+      {
+        "Day": "2031-03-04",
+        "Supply ID": "41007",
+        "Country": "GB",
+        "Size": "468x60",
+        "Placement Type": "Video",
+        "Device Type": "Tablet"
+      },
+      {
+        "Day": "2031-03-05",
+        "Supply ID": "07731",
+        "Country": "BR",
+        "Size": "468x60",
+        "Placement Type": "Video",
+        "Device Type": "Tablet"
+      }
+    ],
+    "profit_cent_discrepancy": [
+      {
+        "Day": "2031-03-03",
+        "Supply ID": "41007",
+        "Country": "US",
+        "Size": "728x90",
+        "Placement Type": "Banner",
+        "Device Type": "Desktop"
+      },
+      {
+        "Day": "2031-03-06",
+        "Supply ID": "41007",
+        "Country": "DE",
+        "Size": "728x90",
+        "Placement Type": "Video",
+        "Device Type": "Mobile"
+      }
+    ],
+    "profit_over_rounding_bound": [
+      {
+        "Day": "2031-03-06",
+        "Supply ID": "73005",
+        "Country": "IN",
+        "Size": "728x90",
+        "Placement Type": "Video",
+        "Device Type": "Tablet"
+      }
+    ],
+    "rounding_zero_revenue": [
+      {
+        "Day": "2031-03-03",
+        "Supply ID": "73005",
+        "Country": "DE",
+        "Size": "970x250",
+        "Placement Type": "Video",
+        "Device Type": "Mobile"
+      },
+      {
+        "Day": "2031-03-04",
+        "Supply ID": "07731",
+        "Country": "IN",
+        "Size": "970x250",
+        "Placement Type": "Video",
+        "Device Type": "Mobile"
+      },
+      {
+        "Day": "2031-03-05",
+        "Supply ID": "41007",
+        "Country": "IN",
+        "Size": "970x250",
+        "Placement Type": "Video",
+        "Device Type": "Desktop"
+      }
+    ]
+  },
+  "placeholders": {
+    "country": [
+      "-"
+    ],
+    "size": [
+      "9999x9999"
+    ]
+  }
+}

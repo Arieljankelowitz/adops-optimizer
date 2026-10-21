@@ -1,0 +1,274 @@
+{
+  "$defs": {
+    "InferenceRestriction": {
+      "description": "Inferences a quality issue removes from the affected scope.",
+      "enum": [
+        "no_recommendations",
+        "no_funnel_inference",
+        "no_yield_estimate",
+        "no_stable_scale_claim",
+        "no_trend_claim",
+        "no_matched_peer_label",
+        "no_country_opportunity",
+        "no_format_specific_test",
+        "no_floor_causal_claim",
+        "exported_rate_untrusted"
+      ],
+      "title": "InferenceRestriction",
+      "type": "string"
+    },
+    "QualityIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_candidate_ids": {
+          "items": {
+            "pattern": "^C_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Affected Candidate Ids",
+          "type": "array"
+        },
+        "inference_restrictions": {
+          "items": {
+            "$ref": "#/$defs/InferenceRestriction"
+          },
+          "title": "Inference Restrictions",
+          "type": "array"
+        },
+        "issue_id": {
+          "pattern": "^Q_[0-9a-f]{16}$",
+          "title": "Issue Id",
+          "type": "string"
+        },
+        "measured_fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Measured Fact Ids",
+          "type": "array"
+        },
+        "message_template_id": {
+          "pattern": "^DQ[0-9]{2}_[a-z0-9_]+$",
+          "title": "Message Template Id",
+          "type": "string"
+        },
+        "period_ids": {
+          "items": {
+            "pattern": "^P_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Period Ids",
+          "type": "array"
+        },
+        "request_exposure_fact_id": {
+          "anyOf": [
+            {
+              "pattern": "^F_[0-9a-f]{16}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Exposure Fact Id"
+        },
+        "revenue_exposure_fact_id": {
+          "anyOf": [
+            {
+              "pattern": "^F_[0-9a-f]{16}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Revenue Exposure Fact Id"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "rule_id": {
+          "$ref": "#/$defs/QualityRuleId"
+        },
+        "rule_version": {
+          "minimum": 1,
+          "title": "Rule Version",
+          "type": "integer"
+        },
+        "segment_ids": {
+          "items": {
+            "pattern": "^G_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Segment Ids",
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "threshold_fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Threshold Fact Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "issue_id",
+        "rule_id",
+        "rule_version",
+        "severity",
+        "segment_ids",
+        "period_ids",
+        "measured_fact_ids",
+        "threshold_fact_ids",
+        "row_count",
+        "request_exposure_fact_id",
+        "revenue_exposure_fact_id",
+        "inference_restrictions",
+        "message_template_id"
+      ],
+      "title": "QualityIssue",
+      "type": "object"
+    },
+    "QualityPass": {
+      "enum": [
+        "initial",
+        "refined"
+      ],
+      "title": "QualityPass",
+      "type": "string"
+    },
+    "QualityRuleId": {
+      "enum": [
+        "DQ01",
+        "DQ02",
+        "DQ03",
+        "DQ04",
+        "DQ05",
+        "DQ06",
+        "DQ07",
+        "DQ08",
+        "DQ09",
+        "DQ10",
+        "DQ11",
+        "DQ12",
+        "DQ13",
+        "DQ14",
+        "DQ15",
+        "DQ16",
+        "DQ17",
+        "DQ18",
+        "DQ19",
+        "DQ20"
+      ],
+      "title": "QualityRuleId",
+      "type": "string"
+    },
+    "QualityRuleResult": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_ids": {
+          "items": {
+            "pattern": "^Q_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Issue Ids",
+          "type": "array"
+        },
+        "outcome": {
+          "$ref": "#/$defs/RuleOutcome"
+        },
+        "rule_id": {
+          "$ref": "#/$defs/QualityRuleId"
+        },
+        "rule_version": {
+          "minimum": 1,
+          "title": "Rule Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rule_id",
+        "rule_version",
+        "outcome",
+        "issue_ids"
+      ],
+      "title": "QualityRuleResult",
+      "type": "object"
+    },
+    "RuleOutcome": {
+      "description": "Insufficient evidence is ``not_testable``, never a pass.",
+      "enum": [
+        "triggered",
+        "not_triggered",
+        "not_testable"
+      ],
+      "title": "RuleOutcome",
+      "type": "string"
+    },
+    "Severity": {
+      "description": "Quality severities: ``fatal`` blocks model recommendations.",
+      "enum": [
+        "fatal",
+        "warning",
+        "notice"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/quality_report.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "config_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Config Hash",
+      "type": "string"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/QualityIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "quality_pass": {
+      "$ref": "#/$defs/QualityPass"
+    },
+    "rule_results": {
+      "items": {
+        "$ref": "#/$defs/QualityRuleResult"
+      },
+      "title": "Rule Results",
+      "type": "array"
+    },
+    "run_namespace": {
+      "pattern": "^N_[0-9a-f]{16}$",
+      "title": "Run Namespace",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_namespace",
+    "quality_pass",
+    "config_hash",
+    "rule_results",
+    "issues"
+  ],
+  "title": "QualityReport",
+  "type": "object",
+  "x-schema-version": "1"
+}
