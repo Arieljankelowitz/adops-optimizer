@@ -17,8 +17,10 @@ import httpx
 import jsonschema
 
 from contracts.config import RunBudget
-from contracts.runtime import ModelClient, ModelRequest, ModelResponse
+from contracts.enums import BudgetReason
+from contracts.runtime import ChatMessage, ModelClient, ModelRequest, ModelResponse
 from llm.profiles import ModelProfile, load_profile
+from llm.tokens import estimate_prompt_tokens
 
 ENV_BASE_URL = "LLM_BASE_URL"
 ENV_API_KEY = "LLM_API_KEY"
@@ -60,6 +62,8 @@ _REDIRECT_STATUS = frozenset({301, 302, 303, 307, 308})
 MAX_REDIRECTS = 8
 READINESS_POLL_TIMEOUT_SECONDS = 60.0
 READINESS_BACKOFF_SECONDS = (2.0, 4.0, 8.0, 15.0, 30.0)
+# Tokenizing is a local computation on the server; it never needs a long wait.
+TOKENIZE_TIMEOUT_SECONDS = 30.0
 
 
 class ModelClientError(Exception):
@@ -79,7 +83,14 @@ class ModelUnavailableError(ModelClientError):
 
 
 class ModelBudgetError(ModelClientError):
-    """The run's network-attempt or warm-inference budget is spent."""
+    """A budget is spent: network attempts, warm inference, generations or prompt size.
+
+    ``reason`` names which one, so a skipped candidate is never just "exhausted".
+    """
+
+    def __init__(self, message: str, reason: BudgetReason | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class ModelToolProtocolError(ModelClientError):
@@ -135,6 +146,9 @@ class ClientStats:
     requests_failed: int = 0
     prompt_tokens: int = 0
     output_tokens: int = 0
+    # Prompt sizes taken from the server's tokenizer vs. the calibrated estimate.
+    token_counts_exact: int = 0
+    token_counts_estimated: int = 0
 
 
 def parse_endpoint(raw: str, *, allow_insecure_localhost: bool = False) -> Endpoint:
@@ -313,6 +327,49 @@ class SelfHostedModelClient:
             raise ModelConfigError(
                 f"endpoint does not serve {self.profile.served_model_name!r}")
 
+    # --- token counting ------------------------------------------------------
+
+    def count_prompt_tokens(self, messages: list[ChatMessage],
+                            tools: list[dict[str, object]] | None = None) -> int:
+        """Tokens the server will see for this chat request.
+
+        Asks the served vLLM to tokenize the same messages and tools with the
+        same template flags. When the server cannot answer (not ready yet, no
+        tokenize route, malformed answer) it returns the conservative
+        ``estimate_prompt_tokens`` instead, never a byte count. Redirects off
+        the approved host still fail closed.
+        """
+        tools = list(tools or [])
+        if self._ready_at is not None:
+            exact = self._tokenize(messages, tools)
+            if exact is not None:
+                self.stats.token_counts_exact += 1
+                return exact
+        self.stats.token_counts_estimated += 1
+        return estimate_prompt_tokens(messages, tools)
+
+    def _tokenize(self, messages: list[ChatMessage],
+                  tools: list[dict[str, object]]) -> int | None:
+        body: dict[str, object] = {
+            "model": self.profile.served_model_name,
+            "messages": [m.model_dump(exclude_none=True) for m in messages],
+            "add_generation_prompt": True,
+            "chat_template_kwargs": {"enable_thinking": self.profile.enable_thinking},
+        }
+        if tools:
+            body["tools"] = tools
+        try:
+            response = self._send("POST", "/tokenize", body,
+                                  self._clock() + TOKENIZE_TIMEOUT_SECONDS,
+                                  root=True)
+            if response.status_code != 200:
+                return None
+            count = response.json()["count"]
+        except (_Transient, _Timeout, ModelUnavailableError, ValueError, KeyError, TypeError):
+            return None
+        return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 \
+            else None
+
     # --- generation --------------------------------------------------------
 
     def generate(self, request: ModelRequest) -> ModelResponse:
@@ -385,13 +442,15 @@ class SelfHostedModelClient:
     def _attempt_deadline(self) -> float:
         if self.stats.network_attempts >= self.budget.max_network_attempts:
             raise ModelBudgetError(
-                f"network attempt budget of {self.budget.max_network_attempts} is spent")
+                f"network attempt budget of {self.budget.max_network_attempts} is spent",
+                BudgetReason.NETWORK_BUDGET)
         assert self._ready_at is not None
         now = self._clock()
         warm_left = self._ready_at + self.budget.warm_inference_seconds - now
         if warm_left <= 0:
             raise ModelBudgetError(
-                f"warm inference budget of {self.budget.warm_inference_seconds} s is spent")
+                f"warm inference budget of {self.budget.warm_inference_seconds} s is spent",
+                BudgetReason.WARM_BUDGET)
         return now + min(self.budget.request_timeout_seconds, warm_left)
 
     def _parse(self, response: httpx.Response, request: ModelRequest) -> ModelResponse:
@@ -467,9 +526,15 @@ class SelfHostedModelClient:
     # --- HTTP ----------------------------------------------------------------
 
     def _send(self, method: str, path: str, body: dict[str, object] | None,
-              deadline: float) -> httpx.Response:
-        """One logical request, following same-origin redirects until ``deadline``."""
-        url = self.endpoint.url + path
+              deadline: float, *, root: bool = False) -> httpx.Response:
+        """One logical request, following same-origin redirects until ``deadline``.
+
+        ``path`` is relative to the endpoint's ``/v1`` base, or to the server
+        root (the same host, without ``/v1``) when ``root`` is set, as for
+        vLLM's ``/tokenize``.
+        """
+        base = self.endpoint.url.removesuffix("/v1") if root else self.endpoint.url
+        url = base + path
         for _ in range(MAX_REDIRECTS + 1):
             remaining = deadline - self._clock()
             if remaining <= 0:

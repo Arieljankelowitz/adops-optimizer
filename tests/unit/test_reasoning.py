@@ -20,7 +20,7 @@ from contracts.models import (
 from contracts.runtime import FactRegistry, ModelResponse
 from llm.analysis import analyze_candidate, reasoning_stats
 from llm.client import ModelAuthError, ModelOutputError
-from llm.prompts import SYSTEM_PROMPT, build_candidate_messages, fact_view, pack_view
+from llm.prompts import SYSTEM_PROMPT, build_candidate_messages, fact_view, facts_view
 from llm.ranking import RankingError, rank_recommendations
 from scripts.export_contracts import build_examples
 
@@ -330,9 +330,9 @@ def test_prompt_injection_is_data_not_system_or_executable_output(pack):
     assert messages[0].content == SYSTEM_PROMPT and malicious not in messages[0].content
     assert (
         malicious
-        in json.loads(messages[1].content)["untrusted_evidence"]["segments"][0][
-            "filters"
-        ]["supply_id"]
+        in json.loads(messages[1].content)["untrusted_evidence"][
+            "untrusted_segment_labels"
+        ][0]["filters"]["supply_id"]
     )
     assert (
         "source_lines" not in messages[1].content
@@ -387,7 +387,7 @@ def test_ranking_unknown_ids_and_one_repair(pack):
 
 
 def test_compact_fact_encoding_is_lossless_for_safety_fields(pack):
-    table = pack_view(pack)["facts"]
+    table = facts_view(pack.facts)
     for fact, row in zip(pack.facts, table["rows"], strict=True):
         decoded = dict(zip(table["fields"], row, strict=True))
         decoded.update(

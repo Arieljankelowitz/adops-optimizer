@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 from contracts.config import RunBudget
 from contracts.enums import (
     AnalysisStatus,
+    BudgetReason,
     Dimension,
     EligibilityStatus,
     MetricKey,
@@ -44,7 +45,11 @@ from llm.client import (
     ModelToolProtocolError,
 )
 from llm.prompts import EXPLORE_PROMPT, build_candidate_messages, tool_view
+from llm.tokens import estimate_prompt_tokens
 from llm.tools import extend_bundle, peer_definition
+
+# Room kept free after a tool result for the next turn's instruction.
+TURN_RESERVE_TOKENS = 256
 
 
 @dataclass
@@ -67,32 +72,45 @@ def reasoning_stats(client: ModelClient) -> ReasoningStats:
     return state
 
 
-def generate(client, budget, messages, model, name, *, tools=(), prompt_limit=None):
-    """No transport retries here: llm.client owns those and its independent cap."""
+def prompt_limit(client) -> int:
+    """Largest prompt the profile allows; 16,384 context minus the output reserve."""
+    profile = getattr(client, "profile", None)
+    return getattr(profile, "max_prompt_tokens", 12288)
+
+
+def count_prompt(client, messages, tools=()) -> int:
+    """Tokens of a request: the deployed tokenizer's count when the client has one.
+
+    Never bytes: a client without a counter gets the calibrated estimate, which
+    errs high, so an unknown tokenizer cannot overrun the context.
+    """
+    counter = getattr(client, "count_prompt_tokens", None)
+    if counter is not None:
+        return counter(messages, list(tools))
+    return estimate_prompt_tokens(messages, tools)
+
+
+def generate(client, budget, messages, model, name, *, tools=()):
+    """No transport retries here: llm.client owns those and its independent cap.
+
+    Raises ``ModelBudgetError`` carrying which limit was hit, before any request.
+    """
     stats = reasoning_stats(client)
     # 77 ordinary generations plus at most 4 discovery + 3*5 extra judgments.
     generation_cap = 77 + (19 if budget.explore_enabled else 0)
     if stats.generations >= min(generation_cap, budget.max_network_attempts, 100):
-        raise ModelBudgetError("generation_budget_exhausted")
-    if time.monotonic() - stats.started >= min(budget.warm_inference_seconds, 1800):
-        raise ModelBudgetError("warm_budget_exhausted")
-    profile = getattr(client, "profile", None)
-    limit = min(prompt_limit or 12288, getattr(profile, "max_prompt_tokens", 12288))
-    # Deployments may supply their exact tokenizer. Offline/default mode uses a
-    # conservative UTF-8 byte upper bound, not an optimistic chars/4 estimate.
-    # Refuse oversize packs rather than removing caveats or counter-evidence.
-    counter = getattr(client, "count_prompt_tokens", None)
-    count = (
-        counter(messages, list(tools))
-        if counter
-        else sum(
-            len(canonical_json(m.model_dump(exclude_none=True)).encode("utf-8")) + 32
-            for m in messages
+        raise ModelBudgetError(
+            "generation_budget_exhausted", BudgetReason.GENERATION_BUDGET
         )
-        + (len(canonical_json(list(tools)).encode("utf-8")) if tools else 0)
-    )
-    if count > limit:
-        raise ModelBudgetError("prompt_budget_exhausted")
+    if time.monotonic() - stats.started >= min(budget.warm_inference_seconds, 1800):
+        raise ModelBudgetError("warm_budget_exhausted", BudgetReason.WARM_BUDGET)
+    profile = getattr(client, "profile", None)
+    # The complete request is counted again here even though the evidence gate
+    # already bounded the pack: the gate cannot see the instructions, tool
+    # results or repair turns. Oversize prompts are refused, never trimmed, so
+    # caveats and counter-evidence are not removed.
+    if count_prompt(client, messages, tools) > prompt_limit(client):
+        raise ModelBudgetError("prompt_budget_exhausted", BudgetReason.PROMPT_BUDGET)
     stats.generations += 1
     return client.generate(
         ModelRequest(
@@ -194,6 +212,7 @@ def analyze_candidate(
             tool_evidence=[],
             generation_turns=0,
             repairs=0,
+            budget_reason=BudgetReason.CANDIDATE_CAP,
         )
     stats.candidate_ids.add(cid)
     messages = build_candidate_messages(pack)
@@ -201,8 +220,10 @@ def analyze_candidate(
     turns = repairs = executions = 0
     native = budget.native_tools_enabled
     repair_errors = None
+    # Set once a tool result cannot fit the prompt: judge on what the model has.
+    force_final = False
 
-    def result(status, rec=None):
+    def result(status, rec=None, reason=None):
         if status is not AnalysisStatus.COMPLETE:
             stats.incomplete_candidates.append(cid)
         return CandidateAnalysis(
@@ -212,11 +233,16 @@ def analyze_candidate(
             tool_evidence=evidence,
             generation_turns=turns,
             repairs=repairs,
+            budget_reason=reason
+            if status is AnalysisStatus.BUDGET_EXHAUSTED
+            else None,
         )
 
     while turns < min(budget.max_turns_per_candidate, 4) or repair_errors is not None:
         repair = repair_errors is not None
-        final_only = repair or turns + 1 >= min(budget.max_turns_per_candidate, 4)
+        final_only = (
+            repair or force_final or turns + 1 >= min(budget.max_turns_per_candidate, 4)
+        )
         if repair:
             if repairs >= min(budget.max_repairs_per_candidate, 1):
                 return result(AnalysisStatus.REJECTED_INVALID)
@@ -266,7 +292,6 @@ def analyze_candidate(
                 )
                 if native and not final_only
                 else (),
-                prompt_limit=pack.token_budget,
             )
             call = native_call = None
             if response.tool_calls:
@@ -301,7 +326,9 @@ def analyze_candidate(
                 key = canonical_json(call.model_dump(mode="json"))
                 if key not in cache:
                     if executions >= min(budget.max_tool_calls_per_candidate, 3):
-                        return result(AnalysisStatus.BUDGET_EXHAUSTED)
+                        return result(
+                            AnalysisStatus.BUDGET_EXHAUSTED, reason=BudgetReason.TOOL_BUDGET
+                        )
                     executions += 1
                     ev = tools.dispatch(cid, call)
                     if ev.run_namespace != pack.run_namespace or ev.tool_call != call:
@@ -316,25 +343,32 @@ def analyze_candidate(
                 )
                 content = canonical_json(tool_view(ev, facts))
                 if native_call:
-                    messages.extend(
-                        [
-                            ChatMessage(
-                                role="assistant", content="", tool_calls=[native_call]
-                            ),
-                            ChatMessage(
-                                role="tool",
-                                content=content,
-                                tool_call_id=native_call["id"],
-                            ),
-                        ]
-                    )
+                    exchange = [
+                        ChatMessage(
+                            role="assistant", content="", tool_calls=[native_call]
+                        ),
+                        ChatMessage(
+                            role="tool",
+                            content=content,
+                            tool_call_id=native_call["id"],
+                        ),
+                    ]
                 else:
-                    messages.extend(
-                        [
-                            ChatMessage(role="assistant", content=response.content),
-                            ChatMessage(role="user", content=content),
-                        ]
-                    )
+                    exchange = [
+                        ChatMessage(role="assistant", content=response.content),
+                        ChatMessage(role="user", content=content),
+                    ]
+                # Only a result the next turn can still carry goes into the
+                # prompt. Otherwise the model gets one final-only turn on the
+                # pack it already has; the execution stays in the audit trail.
+                if (
+                    count_prompt(client, messages + exchange)
+                    + TURN_RESERVE_TOKENS
+                    > prompt_limit(client)
+                ):
+                    force_final = True
+                else:
+                    messages.extend(exchange)
                 continue
             _check_recommendation(rec, pack)
             completed = result(AnalysisStatus.COMPLETE, rec)
@@ -348,8 +382,8 @@ def analyze_candidate(
                     repair_errors = sorted({e.code.value for e in verdict.errors})
                     continue
             return completed
-        except ModelBudgetError:
-            return result(AnalysisStatus.BUDGET_EXHAUSTED)
+        except ModelBudgetError as exc:
+            return result(AnalysisStatus.BUDGET_EXHAUSTED, reason=exc.reason)
         except ModelToolProtocolError:
             if not native or repair:
                 return result(AnalysisStatus.TRANSPORT_FAILED)
@@ -365,7 +399,7 @@ def analyze_candidate(
             repair_errors = ["invalid_schema_scope_or_tool"]
         except ModelClientError:
             return result(AnalysisStatus.TRANSPORT_FAILED)
-    return result(AnalysisStatus.BUDGET_EXHAUSTED)
+    return result(AnalysisStatus.BUDGET_EXHAUSTED, reason=BudgetReason.TURN_BUDGET)
 
 
 @dataclass(frozen=True)
