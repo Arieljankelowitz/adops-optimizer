@@ -27,10 +27,25 @@
       "title": "Generated At",
       "type": "string"
     },
+    "incomplete_candidate_ids": {
+      "items": {
+        "pattern": "^C_[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "title": "Incomplete Candidate Ids",
+      "type": "array"
+    },
     "input_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Input Sha256",
       "type": "string"
+    },
+    "model_call_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Model Call Counts",
+      "type": "object"
     },
     "model_id": {
       "anyOf": [

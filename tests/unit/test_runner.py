@@ -393,9 +393,10 @@ def test_cancel_during_model_stage_prevents_further_calls() -> None:
 
 def test_tool_calls_are_bounded_per_candidate() -> None:
     def analysis(pack, tools, client, budget):
-        args = DailyTrendArgs(segment_id=pack.candidate.segment_id,
-                              period_id=pack.candidate.period_id)
-        for _ in range(budget.max_tool_calls_per_candidate + 1):
+        # Distinct calls consume executions; identical calls now hit the cache.
+        for i in range(budget.max_tool_calls_per_candidate + 1):
+            args = DailyTrendArgs(segment_id=pack.candidate.segment_id,
+                                  period_id=f"P_{i:016x}")
             tools.dispatch(pack.candidate.candidate_id, args)
         raise AssertionError("unreachable")
 

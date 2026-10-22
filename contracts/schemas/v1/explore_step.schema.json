@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "BreakdownArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/Dimension"
+        },
+        "limit": {
+          "default": 10,
+          "maximum": 25,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "tool": {
+          "const": "breakdown",
+          "default": "breakdown",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "by",
+        "period_id"
+      ],
+      "title": "BreakdownArgs",
+      "type": "object"
+    },
+    "CompareToPeersArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "peer_definition_id": {
+          "pattern": "^D_[0-9a-f]{16}$",
+          "title": "Peer Definition Id",
+          "type": "string"
+        },
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "tool": {
+          "const": "compare_to_peers",
+          "default": "compare_to_peers",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "period_id",
+        "peer_definition_id"
+      ],
+      "title": "CompareToPeersArgs",
+      "type": "object"
+    },
+    "DailyTrendArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "tool": {
+          "const": "daily_trend",
+          "default": "daily_trend",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "period_id"
+      ],
+      "title": "DailyTrendArgs",
+      "type": "object"
+    },
+    "DetectorFamily": {
+      "enum": [
+        "scale_winner",
+        "wasted_requests",
+        "margin_leak",
+        "floor_high_bid",
+        "floor_low_bid",
+        "wins_impressions_discrepancy",
+        "trend",
+        "combination_outlier"
+      ],
+      "title": "DetectorFamily",
+      "type": "string"
+    },
+    "Dimension": {
+      "description": "The five approved segment dimensions; also the drill-down ``by`` values.",
+      "enum": [
+        "supply_id",
+        "country",
+        "size",
+        "placement_type",
+        "device_type"
+      ],
+      "title": "Dimension",
+      "type": "string"
+    },
+    "ExploreProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "family": {
+          "$ref": "#/$defs/DetectorFamily"
+        },
+        "period_id": {
+          "pattern": "^P_[0-9a-f]{16}$",
+          "title": "Period Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "pattern": "^G_[0-9a-f]{16}$",
+          "title": "Segment Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "family",
+        "segment_id",
+        "period_id",
+        "fact_ids"
+      ],
+      "title": "ExploreProposal",
+      "type": "object"
+    }
+  },
+  "$id": "adops-optimizer/contracts/v1/explore_step.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "call_tool",
+        "final"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "proposals": {
+      "items": {
+        "$ref": "#/$defs/ExploreProposal"
+      },
+      "maxItems": 3,
+      "title": "Proposals",
+      "type": "array"
+    },
+    "tool_call": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "breakdown": "#/$defs/BreakdownArgs",
+              "compare_to_peers": "#/$defs/CompareToPeersArgs",
+              "daily_trend": "#/$defs/DailyTrendArgs"
+            },
+            "propertyName": "tool"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/BreakdownArgs"
+            },
+            {
+              "$ref": "#/$defs/DailyTrendArgs"
+            },
+            {
+              "$ref": "#/$defs/CompareToPeersArgs"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tool Call"
+    }
+  },
+  "required": [
+    "kind"
+  ],
+  "title": "ExploreStep",
+  "type": "object",
+  "x-schema-version": "1"
+}

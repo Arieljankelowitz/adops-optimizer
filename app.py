@@ -338,6 +338,7 @@ def _candidates_tab(outcome: RunOutcome) -> None:
     failures = outcome.run.validation_failures
     table = [{
         "candidate": c.candidate_id, "family": T.FAMILY_LABELS[c.family],
+        "origin": "model-proposed" if c.origin == "model_proposed" else "detector-raised",
         "eligibility": c.eligibility.value, "segment": _segment_label(outcome, c.segment_id),
         "model decision": decisions.get(c.candidate_id,
                                         "rejected by validation" if c.candidate_id in failures

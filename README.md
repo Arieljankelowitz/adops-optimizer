@@ -21,7 +21,7 @@ committed to this repository; only independently generated synthetic data is.
 | Aggregation, all eight detector families and conditional scenarios | done |
 | Report renderer, run bundle, runner, CLI, Streamlit app | done, against synthetic run fixtures |
 | Evidence builder and validator | in progress (stubs raise `NotImplementedError`) |
-| Prompts, analysis, tools and ranking | in progress (stubs) |
+| Prompts, analysis, tools and ranking | implemented; offline mock-client acceptance, pending evidence/validator integration |
 
 Until the remaining modules land, the app's **cached demo run** and the CLI's
 `demo` command show the complete flow on a synthetic run. A live run loads the
@@ -167,7 +167,57 @@ Overlapping parent/child candidates are grouped so impacts are never summed.
 Three deterministic drill-down tools (`breakdown`, `daily_trend`,
 `compare_to_peers`) are available to the model, at most three calls per
 candidate, and in the app's Drill-down tab. Truncated breakdowns keep an
-"other" bucket so coverage stays complete.
+"other" bucket so coverage stays complete. Daily tools distinguish absent
+observations from observed zero; peer definitions retain fixed matching keys
+(including placement) and exclude the target. Tool facts are promoted into the
+same immutable namespace before validation or rendering. Repeated calls are
+cached only within that namespace.
+
+### Bounded model reasoning
+
+`llm/prompts.py` versions a reference-only system contract. Labels and tool
+results are untrusted JSON data, never instructions; the model selects typed
+observations and reviewed codes, not numerical prose. No raw rows enter prompts.
+`llm/analysis.py` judges at most 15 rule candidates, with at most four turns,
+three tool executions and one shared schema/grounding repair each. Transport
+retries remain exclusively in `llm/client.py`: authentication and safety failures
+are not retried. The last turn and every repair require a final answer, not tools.
+
+The default parser-independent loop returns `NextStep` (`call_tool` or `final`).
+`RunConfig.budget.native_tools_enabled` is **false** until the exact deployed
+parser passes compatibility tests. Native mode uses the same schema-constrained,
+non-thinking client and typed handlers; a refused/invalid native protocol switches
+to the JSON loop within the existing turn budget. Neither mode executes arbitrary
+Python, SQL, shell commands, network requests or filesystem operations.
+
+After rule judgments, `RunConfig.budget.explore_enabled` optionally enables a
+separate discovery stage (default **false**): at most four discovery turns, three
+tool executions and three proposals. `max_explore_proposals` can lower that cap.
+Proposals must reference facts actually returned by discovery tools, not merely
+IDs seen in a prompt. They are labelled **model-proposed (not detector-raised)**
+in contracts, the candidate table and the report. They receive the ordinary
+judgment loop and the same strict validator, with no exemptions. No new numeric
+assumptions/scenarios are minted. Optional exploration failure never blocks the
+rule results; unknown impact and an investigation-first outcome are appropriate.
+
+`llm/ranking.py` receives canonically ordered validated recommendations, selects
+up to ten, and allows one repair. It checks namespace, references, duplicates,
+summary grounding and overlapping scopes. Merges require identical scopes and
+all source evidence/caveats already present in the validated target; wider unions
+fail closed. Unselected recommendations remain in the audit trail. Stable input
+ordering/tie-breaks do not make model judgments deterministic.
+
+The ordinary ceiling is **77 generations**; enabled exploration adds at most
+**19**, for **96**. Independently, the client enforces 100 network attempts,
+30 minutes warm wall time, 180 seconds per request and a separate 600-second
+readiness allowance. Profile prompt/output bounds remain authoritative (primary
+12,288/2,048; smaller profile 6,144/1,024). A deployed tokenizer can supply
+`client.count_prompt_tokens(messages, tools)`; without it, a conservative UTF-8
+byte upper bound refuses oversized prompts rather than dropping warnings,
+units or counter-evidence. This may reject packs that a tokenizer could fit;
+exact-tokenizer/max-pack live acceptance remains required. Counts and incomplete
+candidate IDs are recorded in the private manifest. Exhaustion yields a partial
+run, never an invented successful ranking.
 
 Conditional scenarios (additional eligible requests, throttle, margin
 sensitivity, rendering sensitivity) are computed by code from historical facts
@@ -291,6 +341,15 @@ model lanes are integrated. Each run's manifest records input, configuration,
 profile, prompt and tool hashes so a report can be reproduced as an artifact;
 a repeated model run may still rank differently.
 
+The offline reasoning mini-eval includes 24 independently constructed synthetic
+packs across every detector family, scripted weak-pattern rejections, and
+adversarial labels. Additional tests cover native and fallback tool round trips,
+truncation/residual totals, missing versus zero days, scope/namespace isolation,
+malformed/null output, finite repair budgets, ranking caveats and explore caps
+and provenance. These mocked tests assess protocol/safety behavior, **not** real
+model recommendation quality, causal validity or serving compatibility. No live
+model requests or cloud spending are part of the normal test suite.
+
 Known limits: daily aggregates cannot show causation, auction-level floor
 effects, hourly completeness, request-processing costs or alternative demand;
 the export has no partner dimension.
@@ -323,8 +382,8 @@ multi-partner comparison and an optional fast triage step.
 contracts/          shared data contracts (pydantic v2), IDs, templates, JSON Schemas
 pipeline/           load, quality, metrics, detectors, scenarios (implemented);
                     evidence (stub); scope.py shared segment/period IDs
-llm/                client and profiles (implemented); prompts, analysis, tools,
-                    ranking, validator (stubs)
+llm/                client, profiles, prompts, analysis, tools, ranking (implemented);
+                    validator (stub)
 report/
   render.py         Markdown renderer and post-render audit
   text.py           reviewed wording (no digits)
