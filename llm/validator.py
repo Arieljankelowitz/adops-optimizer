@@ -534,7 +534,11 @@ class _Validator:
         if rec.candidate_id != candidate.candidate_id:
             self.error(Code.WRONG_ROLE, "recommendation.candidate_id", rec.candidate_id)
         if rec.origin != candidate.origin:
-            self.error(Code.WRONG_ROLE, "recommendation.origin", detail="candidate origin cannot be relabelled")
+            self.error(
+                Code.WRONG_ROLE,
+                "recommendation.origin",
+                detail="candidate origin cannot be relabelled",
+            )
         if (
             rec.segment_id != candidate.segment_id
             or rec.segment_id not in self.b.segments
@@ -544,14 +548,19 @@ class _Validator:
             self.error(Code.WRONG_PERIOD, "recommendation.period_id", rec.period_id)
         pack = self.b.packs.get(candidate.candidate_id)
         allowed = {f.fact_id for f in pack.facts} if pack else set()
-        tool_segments = {s.segment_id for s in pack.segments} if pack else {candidate.segment_id}
-        tool_periods = {p.period_id for p in pack.periods} if pack else {candidate.period_id}
+        tool_segments = (
+            {s.segment_id for s in pack.segments} if pack else {candidate.segment_id}
+        )
+        tool_periods = (
+            {p.period_id for p in pack.periods} if pack else {candidate.period_id}
+        )
         for tool in output.tool_evidence:
             self.namespace(tool, "tool_evidence")
             if (
                 tool.tool_call.segment_id not in tool_segments
                 or tool.tool_call.period_id not in tool_periods
-                or pack is None or tool.tool_call.tool not in pack.tool_allowlist
+                or pack is None
+                or tool.tool_call.tool not in pack.tool_allowlist
             ):
                 self.error(Code.WRONG_ROLE, "tool_evidence", tool.tool_invocation_id)
             for fact in tool.appended_facts:
@@ -747,9 +756,15 @@ class _Validator:
         from llm.ranking import RankingError, check_ranking
 
         try:
-            check_ranking(output, list(self.b.validated_recommendations.values()), self.b.facts)
+            check_ranking(
+                output, list(self.b.validated_recommendations.values()), self.b.facts
+            )
         except RankingError:
-            self.error(Code.OVERLAP_CONFLICT, "ranking", detail="selection violates validated ranking/merge policy")
+            self.error(
+                Code.OVERLAP_CONFLICT,
+                "ranking",
+                detail="selection violates validated ranking/merge policy",
+            )
         ids = output.ranked_recommendation_ids
         if len(set(ids)) != len(ids):
             self.error(Code.OVERLAP_CONFLICT, "ranked_recommendation_ids")

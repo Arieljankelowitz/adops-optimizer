@@ -713,6 +713,13 @@ def test_trend_requires_ordered_same_scope_parents_and_recomputed_change(
     )
 
 
+def test_candidate_origin_cannot_be_relabelled(bundle):
+    a = analysis_for(bundle)
+    assert Code.WRONG_ROLE in codes(
+        validate_analysis(changed(a, origin="model_proposed"), bundle)
+    )
+
+
 def test_registered_fact_with_cross_file_provenance_is_rejected(bundle):
     a = analysis_for(bundle)
     ref = a.recommendation.observation_statements[0].fact_ids[0]
