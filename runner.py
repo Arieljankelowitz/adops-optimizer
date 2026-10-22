@@ -45,6 +45,7 @@ from contracts import SCHEMA_VERSION
 from contracts.config import RunBudget, RunConfig, config_hash
 from contracts.enums import (
     AnalysisStatus,
+    BudgetReason,
     Decision,
     ProgressStage,
     ProgressState,
@@ -221,9 +222,24 @@ class PipelineStages:
     compare_to_peers: Callable
 
 
+def _build_evidence(metrics, quality, candidates, config):
+    """Evidence with the calibrated token gate, before any server is reachable.
+
+    The estimate errs high, so a pack that passes also passes the exact count at
+    request time. A candidate whose mandatory evidence cannot fit is left
+    unjudged with a reason instead of stopping the run.
+    """
+    from llm.tokens import estimate_pack_prompt_tokens
+    from pipeline import evidence
+
+    return evidence.build_evidence_bounded(
+        metrics, quality, candidates, config,
+        count_tokens=estimate_pack_prompt_tokens, skip_oversize=True)
+
+
 def default_stages() -> PipelineStages:
     from llm import analysis, ranking, tools, validator
-    from pipeline import detectors, evidence, load, metrics, quality
+    from pipeline import detectors, load, metrics, quality
     from report import render
 
     return PipelineStages(
@@ -232,7 +248,7 @@ def default_stages() -> PipelineStages:
         aggregate=metrics.aggregate,
         detect_opportunities=detectors.detect_opportunities,
         refine_quality=quality.refine_quality,
-        build_evidence=evidence.build_evidence,
+        build_evidence=_build_evidence,
         create_client=_create_client,
         analyze_candidate=analysis.analyze_candidate,
         validate_analysis=validator.validate_analysis,
@@ -435,7 +451,14 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
     for skipped in list(bundle.packs.values())[len(packs):]:
         result.analyses.append(CandidateAnalysis(
             candidate_id=skipped.candidate.candidate_id, status=AnalysisStatus.BUDGET_EXHAUSTED,
-            recommendation=None, tool_evidence=[], generation_turns=0, repairs=0))
+            recommendation=None, tool_evidence=[], generation_turns=0, repairs=0,
+            budget_reason=BudgetReason.CANDIDATE_CAP))
+    for cid, reason in bundle.unpacked.items():
+        progress.emit(ProgressStage.CANDIDATE_ANALYSIS, ProgressState.SKIPPED, reason.value, cid)
+        result.analyses.append(CandidateAnalysis(
+            candidate_id=cid, status=AnalysisStatus.BUDGET_EXHAUSTED, recommendation=None,
+            tool_evidence=[], generation_turns=0, repairs=0, budget_reason=reason))
+        complete = False
     for pack in packs:
         cid = pack.candidate.candidate_id
         progress.check_cancel(ProgressStage.CANDIDATE_ANALYSIS, cid)
@@ -444,7 +467,8 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
                           "wall_clock_budget_exhausted", cid)
             result.analyses.append(CandidateAnalysis(
                 candidate_id=cid, status=AnalysisStatus.BUDGET_EXHAUSTED,
-                recommendation=None, tool_evidence=[], generation_turns=0, repairs=0))
+                recommendation=None, tool_evidence=[], generation_turns=0, repairs=0,
+                budget_reason=BudgetReason.WARM_BUDGET))
             complete = False
             continue
         progress.emit(ProgressStage.CANDIDATE_ANALYSIS, ProgressState.STARTED,
@@ -466,7 +490,10 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
         else:
             state = (ProgressState.SUCCEEDED if analysis.status is AnalysisStatus.COMPLETE
                      else ProgressState.FAILED)
-            progress.emit(ProgressStage.CANDIDATE_ANALYSIS, state, analysis.status.value, cid)
+            code = analysis.status.value
+            if analysis.budget_reason is not None:
+                code = f"{code}_{analysis.budget_reason.value}"
+            progress.emit(ProgressStage.CANDIDATE_ANALYSIS, state, code, cid)
         result.analyses.append(analysis)
         bundle = router.ctx.bundle
         if analysis.status is AnalysisStatus.REJECTED_INVALID:
@@ -562,7 +589,8 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
     transport = getattr(client, "stats", None)
     if transport is not None:
         result.model_call_counts.update({name: getattr(transport, name, 0) for name in (
-            "network_attempts", "transport_retries", "prompt_tokens", "output_tokens")})
+            "network_attempts", "transport_retries", "prompt_tokens", "output_tokens",
+            "token_counts_exact", "token_counts_estimated")})
     return result
 
 

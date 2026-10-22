@@ -14,6 +14,7 @@ from types import MappingProxyType
 from contracts.config import EvidenceConfig
 from contracts.enums import (
     AssumptionSelector,
+    BudgetReason,
     DetectorFamily,
     EligibilityStatus,
     FactKind,
@@ -65,13 +66,22 @@ class EvidenceBudgetError(ValueError):
     """Mandatory evidence cannot fit; no unsafe partial pack was emitted."""
 
 
-def serialize_pack(pack: CandidatePack) -> str:
-    """Canonical, compact prompt representation; the private pack stays fully typed.
+# Fact rows carry ``None`` for the overwhelmingly common validity.
+DEFAULT_VALIDITY = {"reason": None, "status": "valid"}
 
-    Scope/period tables and the shared namespace avoid repeating them per fact.
-    Provenance needed for reasoning (formula, parents, weighting, quality) stays
-    visible; source hashes/columns/line handles remain in the private registry.
-    Numeric-looking labels live only in the explicitly untrusted segment table.
+
+def pack_payload(pack: CandidatePack) -> dict:
+    """The compact JSON document the model reads for one candidate.
+
+    This is the single serialization of a pack: ``build_evidence`` measures it to
+    fit the token budget and ``llm.prompts`` sends it, so what is gated is what
+    is sent. The private pack stays fully typed.
+
+    Scope/period tables, fact types and the shared namespace avoid repeating
+    them per fact. Provenance needed for reasoning (formula, parents, weighting)
+    stays visible and quality issues carry their own scope. Source
+    hashes/columns/line handles remain in the private registry. Numeric-looking
+    labels live only in the explicitly untrusted segment table.
     """
     payload = pack.model_dump(mode="json")
     payload["untrusted_segment_labels"] = payload.pop("segments")
@@ -82,39 +92,67 @@ def serialize_pack(pack: CandidatePack) -> str:
         s["segment_id"]: n for n, s in enumerate(payload["untrusted_segment_labels"])
     }
     period_indices = {p["period_id"]: n for n, p in enumerate(payload["periods"])}
-    metric_units = sorted({(f["metric"], f["unit"]) for f in payload["facts"]})
-    formulas = sorted({f["provenance"]["formula_id"] for f in payload["facts"]})
-    payload["metric_units"] = metric_units
-    payload["formulas"] = formulas
+    # build_evidence always lists every scope its facts use; a hand-built pack
+    # that does not still gets the missing ones appended rather than dropped.
+    for f in payload["facts"]:
+        if f["segment"]["segment_id"] not in segment_indices:
+            segment_indices[f["segment"]["segment_id"]] = len(segment_indices)
+            payload["untrusted_segment_labels"].append(f["segment"])
+        if f["period"]["period_id"] not in period_indices:
+            period_indices[f["period"]["period_id"]] = len(period_indices)
+            payload["periods"].append(f["period"])
+    fact_types = sorted(
+        {
+            (
+                f["kind"],
+                f["metric"],
+                f["unit"],
+                f["provenance"]["formula_id"],
+                f["provenance"]["weighting"],
+            )
+            for f in payload["facts"]
+        }
+    )
+    payload["fact_type_fields"] = ["kind", "metric", "unit", "formula_id", "weighting"]
+    payload["fact_types"] = [list(t) for t in fact_types]
     payload["fact_fields"] = [
         "fact_id",
-        "kind",
         "segment_index",
         "period_index",
-        "metric_unit_index",
+        "type_index",
         "value",
         "validity",
-        "formula_index",
         "parent_fact_ids",
-        "weighting",
         "comparison",
     ]
+    payload["null_validity_means"] = DEFAULT_VALIDITY
     payload["facts"] = [
         [
             f["fact_id"],
-            f["kind"],
             segment_indices[f["segment"]["segment_id"]],
             period_indices[f["period"]["period_id"]],
-            metric_units.index((f["metric"], f["unit"])),
+            fact_types.index(
+                (
+                    f["kind"],
+                    f["metric"],
+                    f["unit"],
+                    f["provenance"]["formula_id"],
+                    f["provenance"]["weighting"],
+                )
+            ),
             f["value"],
-            f["validity"],
-            formulas.index(f["provenance"]["formula_id"]),
+            None if f["validity"] == DEFAULT_VALIDITY else f["validity"],
             f["provenance"]["parent_fact_ids"],
-            f["provenance"]["weighting"],
             f["comparison"],
         ]
         for f in payload["facts"]
     ]
+    # Issues are rows over one shared field list; every restriction and fact ref
+    # is kept.
+    issues = payload["quality_issues"]
+    fields = sorted(issues[0]) if issues else []
+    payload["quality_issue_fields"] = fields
+    payload["quality_issues"] = [[i[k] for k in fields] for i in issues]
     # These tables retain every restriction and fact ref. Presentation-only
     # prose and redundant namespace fields stay in the private typed objects.
     payload["assumptions"] = [
@@ -134,7 +172,12 @@ def serialize_pack(pack: CandidatePack) -> str:
         }
         for a in payload["assumptions"]
     ]
-    return canonical_json(payload)
+    return payload
+
+
+def serialize_pack(pack: CandidatePack) -> str:
+    """Canonical text of ``pack_payload``; the size the token gate measures."""
+    return canonical_json(pack_payload(pack))
 
 
 def _closure(ids: Iterable[str], facts: dict[str, Fact]) -> set[str]:
@@ -188,6 +231,21 @@ def build_evidence(
     *,
     count_tokens: Callable[[str], int] | None = None,
 ) -> EvidenceBundle:
+    """``build_evidence_bounded`` where an irreducible pack fails the build."""
+    return build_evidence_bounded(
+        metrics, quality, candidates, config, count_tokens=count_tokens
+    )
+
+
+def build_evidence_bounded(
+    metrics: MetricsStore,
+    quality: QualityReport,
+    candidates: list[Candidate],
+    config: EvidenceConfig,
+    *,
+    count_tokens: Callable[[str], int] | None = None,
+    skip_oversize: bool = False,
+) -> EvidenceBundle:
     """Promote real detector/quality facts, compute scenarios, then bound packs.
 
     Optional ``count_tokens`` must be the deployed tokenizer. Without one only
@@ -196,6 +254,9 @@ def build_evidence(
     All candidates stay in the private audit registry; only non-rejected first
     ``max_candidates`` get model packs. Redundant daily/peer rows may be removed,
     never triggers, contrary evidence, quality facts or scenario dependencies.
+    A candidate whose mandatory evidence alone exceeds the budget raises
+    ``EvidenceBudgetError``, or with ``skip_oversize`` gets no pack and is
+    listed in the bundle's ``unpacked`` with the reason.
     """
     ns = metrics.run_namespace
     if quality.run_namespace != ns:
@@ -328,6 +389,7 @@ def build_evidence(
             table[key] = value
     _closure(facts, facts)
     packs = {}
+    unpacked: dict[str, BudgetReason] = {}
     counter = count_tokens
     for candidate in chosen:
         issues = [
@@ -436,11 +498,15 @@ def build_evidence(
 
         pack = pack_for(required)
         if not fits(pack):
-            # Mandatory data is irreducible. Keep it private and report a clear
-            # deterministic-only failure rather than dropping caveats.
-            raise EvidenceBudgetError(
-                "mandatory evidence exceeds the configured pack budget"
-            )
+            # Mandatory data is irreducible: never drop caveats or contrary
+            # evidence to make it fit. Either fail the build, or leave this one
+            # candidate unjudged and say why in ``unpacked``.
+            if not skip_oversize:
+                raise EvidenceBudgetError(
+                    "mandatory evidence exceeds the configured pack budget"
+                )
+            unpacked[candidate.candidate_id] = BudgetReason.EVIDENCE_TOO_LARGE
+            continue
         selected = required
         for ref in (*candidate.peer_fact_ids, *candidate.daily_fact_ids):
             proposal = selected | _closure([ref], facts)
@@ -459,4 +525,5 @@ def build_evidence(
         overlap_groups=MappingProxyType(dict(detected.overlap_groups)),
         quality=quality,
         packs=MappingProxyType(packs),
+        unpacked=MappingProxyType(unpacked),
     )

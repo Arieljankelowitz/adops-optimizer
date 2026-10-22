@@ -17,7 +17,7 @@ import pandas as pd
 from pydantic import Field
 
 from contracts.config import RunConfig
-from contracts.enums import RunStatus, ToolName
+from contracts.enums import BudgetReason, RunStatus, ToolName
 from contracts.models import (
     Assumption,
     Candidate,
@@ -199,6 +199,10 @@ class EvidenceBundle:
     packs: Mapping[str, CandidatePack]
     # Ranking is reference-only and can resolve only previously accepted IR.
     validated_recommendations: Mapping[str, ValidatedRecommendation] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    # Candidates that got no pack, and why; they stay in ``candidates``.
+    unpacked: Mapping[str, BudgetReason] = field(
         default_factory=lambda: MappingProxyType({})
     )
 

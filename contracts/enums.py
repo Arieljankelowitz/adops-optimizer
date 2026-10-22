@@ -315,6 +315,19 @@ class AnalysisStatus(StrEnum):
     TRANSPORT_FAILED = "transport_failed"
 
 
+class BudgetReason(StrEnum):
+    """Which limit ended a ``budget_exhausted`` analysis; never a bare status."""
+
+    PROMPT_BUDGET = "prompt_budget"  # the counted prompt exceeds the profile's limit
+    GENERATION_BUDGET = "generation_budget"  # the run's cap on model generations
+    WARM_BUDGET = "warm_budget"  # the run's warm-inference wall clock
+    NETWORK_BUDGET = "network_budget"  # the transport's cap on network attempts
+    CANDIDATE_CAP = "candidate_cap"  # beyond the candidates a run may judge
+    TOOL_BUDGET = "tool_budget"  # the per-candidate tool execution cap
+    TURN_BUDGET = "turn_budget"  # the per-candidate turns ended without an answer
+    EVIDENCE_TOO_LARGE = "evidence_too_large"  # mandatory evidence cannot fit a pack
+
+
 class ValidationErrorCode(StrEnum):
     SCHEMA_INVALID = "schema_invalid"
     UNKNOWN_REFERENCE = "unknown_reference"

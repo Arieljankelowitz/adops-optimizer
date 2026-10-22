@@ -28,6 +28,7 @@ from contracts import SCHEMA_VERSION
 from contracts.enums import (
     AnalysisStatus,
     AssumptionSelector,
+    BudgetReason,
     Confidence,
     CoverageStatus,
     Decision,
@@ -509,6 +510,8 @@ class CandidateAnalysis(Contract):
     tool_evidence: list[ToolEvidence]
     generation_turns: int = Field(ge=0)
     repairs: int = Field(ge=0)
+    # Set with ``budget_exhausted``: the limit that ended the analysis.
+    budget_reason: BudgetReason | None = None
 
 
 class ValidationIssue(Contract):
