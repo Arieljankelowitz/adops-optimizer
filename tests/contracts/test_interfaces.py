@@ -66,7 +66,8 @@ EXPECTED: list[tuple[Callable[..., object], dict[str, object]]] = [
     }),
     (evidence.build_evidence, {
         "metrics": MetricsStore, "quality": QualityReport, "candidates": list[Candidate],
-        "config": EvidenceConfig, "return": EvidenceBundle,
+        "config": EvidenceConfig, "count_tokens": Callable[[str], int] | None,
+        "return": EvidenceBundle,
     }),
     (scenarios.compute_scenarios, {
         "registry": FactRegistry, "assumptions": AssumptionRegistry,
@@ -118,7 +119,7 @@ def test_breakdown_default_limit() -> None:
 IMPLEMENTED = {
     load.load_csv, quality.assess_quality, quality.refine_quality,
     metrics.aggregate, detectors.detect_opportunities, scenarios.compute_scenarios,
-    render.render_report, runner.run_pipeline,
+    render.render_report, runner.run_pipeline, evidence.build_evidence, validator.validate_analysis,
     analysis.analyze_candidate, ranking.rank_recommendations,
     tools.breakdown, tools.daily_trend, tools.compare_to_peers,
 }

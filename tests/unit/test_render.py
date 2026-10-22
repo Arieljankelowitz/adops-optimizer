@@ -192,7 +192,23 @@ def test_audit_flags_unsourced_numbers_and_unknown_sources(final) -> None:
     assert audit_report(tampered, final.run).uncovered == ("12%",)
     bogus = RenderedReport(markdown="value 7", spans=[
         RenderSpan(start=6, end=7, source_id="F_ffffffffffffffff", role=RenderRole.OBSERVATION)])
-    assert audit_report(bogus, final.run).unresolved == ("F_ffffffffffffffff",)
+    assert "F_ffffffffffffffff" in audit_report(bogus, final.run).unresolved
+    assert "render_replay_mismatch" in audit_report(bogus, final.run).unresolved
+
+
+def test_audit_rejects_changed_numbers_under_known_sources(final) -> None:
+    span = next(s for s in final.report.spans
+                if s.role is RenderRole.OBSERVATION
+                and any(c.isdigit() for c in final.report.markdown[s.start:s.end]))
+    original = final.report.markdown[span.start:span.end]
+    replacement = "".join("9" if c.isdigit() else c for c in original)
+    tampered = final.report.model_copy(update={"markdown": (
+        final.report.markdown[:span.start] + replacement + final.report.markdown[span.end:]
+    )})
+    audit = audit_report(tampered, final.run)
+    assert not audit.ok
+    assert not audit.uncovered  # all digits still sit under known source IDs
+    assert "render_replay_mismatch" in audit.unresolved
 
 
 def test_renderer_refuses_unknown_references(final) -> None:

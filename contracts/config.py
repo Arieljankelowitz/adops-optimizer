@@ -122,7 +122,14 @@ class DetectorConfig(Config):
 
 
 class EvidenceConfig(Config):
-    max_candidates: int = 15
+    max_candidates: int = Field(default=15, ge=1, le=15)
+    # The compact prompt payload reserves space for instructions and tools;
+    # the transport must still count the deployed tokenizer before sending.
+    max_pack_tokens: int = Field(default=10240, gt=0, le=12288)
+    max_pack_bytes: int = Field(default=40960, gt=0)
+    # Supply the deployed tokenizer to build_evidence for a token-exact gate;
+    # the model orchestrator must count the complete prompt again.
+
     default_additional_request_fraction: DecimalValue = Decimal("0.10")
     default_throttle_fraction: DecimalValue = Decimal("0.50")
     margin_sensitivity_points: DecimalValue = Decimal("0.05")

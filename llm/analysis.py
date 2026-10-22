@@ -150,7 +150,7 @@ def _check_recommendation(rec, pack):
         raise ValueError("candidate_scope_or_origin_mismatch")
 
 
-def _tool_facts(evidence, known):
+def _tool_facts(evidence, known, registry=None):
     if known and evidence.run_namespace != next(iter(known.values())).run_namespace:
         raise ValueError("tool_namespace_mismatch")
     for fact in evidence.appended_facts:
@@ -162,6 +162,16 @@ def _tool_facts(evidence, known):
         + evidence.coverage_fact_ids
         + evidence.other_bucket_fact_ids
     )
+    # A bounded initial pack can omit facts already present in the run's
+    # full registry. Tools correctly append only NEW facts; resolve their
+    # existing returned refs from the code-owned registry, not model payloads.
+    if registry is not None:
+        if registry.namespace != evidence.run_namespace:
+            raise ValueError("tool_namespace_mismatch")
+        for ref in refs - known.keys():
+            fact = registry.get(ref)
+            if fact is not None:
+                known[ref] = fact
     if not refs <= known.keys():
         raise ValueError("unresolved_tool_fact")
     return [known[r] for r in sorted(refs)]
@@ -299,7 +309,11 @@ def analyze_candidate(
                     cache[key] = ev
                     evidence.append(ev)
                 ev = cache[key]
-                facts = _tool_facts(ev, known)
+                tool_ctx = getattr(tools, "ctx", None)
+                tool_bundle = getattr(tool_ctx, "bundle", None)
+                facts = _tool_facts(
+                    ev, known, tool_bundle.facts if tool_bundle is not None else None
+                )
                 content = canonical_json(tool_view(ev, facts))
                 if native_call:
                     messages.extend(

@@ -40,6 +40,7 @@ from runner import (
     RunCancelled,
     StageUnavailable,
     cache_key,
+    default_stages,
     execute,
     input_sha256,
     run_pipeline,
@@ -291,8 +292,9 @@ def test_fatal_quality_skips_analytics_and_model() -> None:
 
 def test_unimplemented_pipeline_stage_fails_with_a_clear_message() -> None:
     events = []
+    stages = replace(default_stages(), build_evidence=_not_implemented)
     with pytest.raises(StageUnavailable) as err:
-        execute(io.BytesIO(SAMPLE.read_bytes()), RunConfig(), events.append, env={})
+        execute(io.BytesIO(SAMPLE.read_bytes()), RunConfig(), events.append, env={}, stages=stages)
     assert err.value.stage is ProgressStage.EVIDENCE
     assert "not implemented in this build yet" in err.value.public_message
     assert [(e.stage, e.state) for e in events][-2:] == [

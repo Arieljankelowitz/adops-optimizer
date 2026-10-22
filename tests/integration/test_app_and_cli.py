@@ -69,7 +69,7 @@ def test_demo_drilldown_explains_recorded_tool_calls(demo_app: AppTest) -> None:
     assert any("Recorded tool calls" in i.value for i in demo_app.info)
 
 
-def test_live_path_fails_with_a_clear_message() -> None:
+def test_synthetic_path_runs_deterministic_evidence_without_model() -> None:
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
     at.sidebar.radio(key="mode").set_value("Synthetic sample CSV").run()
@@ -80,8 +80,10 @@ def test_live_path_fails_with_a_clear_message() -> None:
         time.sleep(0.05)
     at.run()
     assert not at.exception
-    errors = [e.value for e in at.error]
-    assert any("not implemented in this build yet" in e for e in errors), errors
+    assert not at.error
+    assert job.outcome is not None
+    assert job.outcome.status.value == "deterministic_only"
+    assert job.outcome.run.bundle.packs
 
 
 def test_app_never_uses_global_streamlit_caches() -> None:
@@ -99,10 +101,12 @@ def test_cli_demo_prints_the_cached_report(capsys) -> None:
     assert "CACHED PREVIOUS RUN — not fresh inference." in out
 
 
-def test_cli_run_reports_unimplemented_stage(capsys) -> None:
-    assert cli.main(["run", str(SAMPLE)]) == cli.EXIT_RUN_FAILED
-    err = capsys.readouterr().err
-    assert "Run stopped at evidence" in err and "not implemented" in err
+def test_cli_run_renders_deterministic_evidence(capsys) -> None:
+    assert cli.main(["run", str(SAMPLE)]) == cli.EXIT_OK
+    captured = capsys.readouterr()
+    assert "DETERMINISTIC" in captured.out
+    assert "[evidence] succeeded" in captured.err
+    assert "not implemented" not in captured.err
 
 
 def test_cli_missing_input(capsys, tmp_path) -> None:
