@@ -22,6 +22,7 @@ from contracts.enums import (
     FactKind,
     InferenceRestriction,
     MetricKey,
+    Relation,
     ScenarioTemplate,
     ToolName,
     Unit,
@@ -115,6 +116,27 @@ DETAILED_ISSUES_PER_RULE = 2
 
 class EvidenceBudgetError(ValueError):
     """Mandatory evidence cannot fit; no unsafe partial pack was emitted."""
+
+
+def permitted_tests(candidate: Candidate, facts: Mapping[str, Fact]) -> list[Test]:
+    """The family's controlled test, then the always-available investigation.
+
+    A combination outlier can sit above or below its baselines. Below them,
+    sending it more traffic is the wrong test, so the low-yield throttle test
+    applies; with baselines on both sides only an investigation does.
+    """
+    test = TESTS[candidate.family]
+    if candidate.family is DetectorFamily.COMBINATION_OUTLIER:
+        relations = {
+            facts[r].comparison.relation
+            for r in candidate.trigger_fact_ids
+            if r in facts and facts[r].comparison is not None
+        }
+        if relations == {Relation.LESS}:
+            test = Test.TARGETED_THROTTLE_HOLDOUT
+        elif relations != {Relation.GREATER}:
+            return [Test.INSTRUMENTATION_FEASIBILITY]
+    return [test, Test.INSTRUMENTATION_FEASIBILITY]
 
 
 def claim_restrictions(
@@ -855,7 +877,7 @@ def build_evidence_bounded(
             for issue in detailed:
                 sids.update(issue.segment_ids)
                 pids.update(issue.period_ids)
-            permitted = [TESTS[candidate.family], Test.INSTRUMENTATION_FEASIBILITY]
+            permitted = permitted_tests(candidate, facts)
             # The full candidate remains in bundle.candidates. The prompt must
             # not advertise refs it did not receive; omissions are retrievable
             # through the allowlisted tools and never alter contrary evidence.

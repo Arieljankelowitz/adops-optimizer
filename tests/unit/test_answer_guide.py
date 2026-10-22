@@ -35,6 +35,7 @@ from contracts.enums import (
     Decision,
     DetectorFamily,
     MetricKey,
+    Relation,
     RunStatus,
 )
 from contracts.enums import ValidationErrorCode as Code
@@ -584,3 +585,24 @@ def test_peer_comparison_is_offered_only_for_slices_fixing_every_dimension(bundl
         if peers:
             enum = schema["$defs"]["CompareToPeersArgs"]["properties"]["segment_id"]["enum"]
             assert all(len(segments[s].filters) == 5 for s in enum)
+
+
+def test_a_slice_below_its_baseline_is_never_offered_more_traffic(bundle):
+    """Live report regression: a combination outlier earning 0.16x its matched
+    peers was recommended as "Scale up" through the family's allocation test."""
+    directions = set()
+    for pack in bundle.packs.values():
+        c = pack.candidate
+        if c.family is not DetectorFamily.COMBINATION_OUTLIER:
+            continue
+        relations = {
+            bundle.facts[r].comparison.relation
+            for r in c.trigger_fact_ids
+            if bundle.facts[r].comparison is not None
+        }
+        directions |= relations
+        allocation = "matched_allocation_holdout" in pack.permitted_test_templates
+        throttle = "targeted_throttle_holdout" in pack.permitted_test_templates
+        assert allocation == (relations == {Relation.GREATER})
+        assert throttle == (relations == {Relation.LESS})
+    assert directions == {Relation.GREATER, Relation.LESS}
