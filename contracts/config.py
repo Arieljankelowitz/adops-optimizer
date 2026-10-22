@@ -123,10 +123,11 @@ class DetectorConfig(Config):
 
 class EvidenceConfig(Config):
     max_candidates: int = Field(default=15, ge=1, le=15)
-    # The compact prompt payload reserves space for instructions and tools;
-    # the transport must still count the deployed tokenizer before sending.
-    max_pack_tokens: int = Field(default=10240, gt=0, le=12288)
-    max_pack_bytes: int = Field(default=40960, gt=0)
+    # The compact prompt payload reserves space for instructions, tool results
+    # and repair turns: half of the active profile's 32,768-token window. The
+    # transport must still count the deployed tokenizer before sending.
+    max_pack_tokens: int = Field(default=16384, gt=0, le=28672)
+    max_pack_bytes: int = Field(default=65536, gt=0)
     # Supply the deployed tokenizer to build_evidence for a token-exact gate;
     # the model orchestrator must count the complete prompt again.
 
@@ -150,7 +151,8 @@ class RunBudget(Config):
     max_candidates: int = 15
     max_tool_calls_per_candidate: int = 3
     max_turns_per_candidate: int = 4
-    max_repairs_per_candidate: int = 1
+    # A refused answer gets up to two corrections that name exactly what was wrong.
+    max_repairs_per_candidate: int = 2
     max_ranking_calls: int = 1
     max_ranking_repairs: int = 1
     max_network_attempts: int = 100

@@ -344,6 +344,55 @@ class Candidate(Contract):
     rejection_reason: str | None = None
 
 
+class ObservationStatement(Contract):
+    template_id: ObservationTemplateId
+    fact_ids: list[FactId] = Field(min_length=1, max_length=6)
+
+
+class QualityIssueSummary(Contract):
+    """Quality issues on a candidate whose restrictions cannot touch its claims, by rule."""
+
+    rule_id: QualityRuleId
+    severity: Severity
+    issue_count: int = Field(ge=1)
+    inference_restrictions: list[InferenceRestriction]
+
+
+class TestRequirements(Contract):
+    """What a ``recommend_test`` decision must carry for this candidate."""
+
+    __test__ = False  # not a pytest test class
+
+    test_template_ids: list[TestTemplateId] = Field(min_length=1)
+    assumption_ids: list[AssumptionId]
+    success_metric_keys: list[MetricKey]
+
+
+class ScenarioLabels(Contract):
+    """The labels a recommendation must carry when it cites this scenario."""
+
+    scenario_id: ScenarioId
+    assumption_ids: list[AssumptionId]
+    prerequisite_codes: list[PrerequisiteCode]
+    risk_codes: list[RiskCode]
+
+
+class AnswerGuide(Contract):
+    """Code-computed answer form for one candidate, derived from the validator's rules.
+
+    It narrows what the model may select; it never relaxes a rule. Every
+    observation option is a statement the strict validator accepts for this
+    candidate, so the model chooses evidence instead of assembling fact roles.
+    """
+
+    effective_restrictions: list[InferenceRestriction]
+    allowed_decisions: list[Decision] = Field(min_length=1)
+    observation_options: list[ObservationStatement] = Field(max_length=24)
+    recommend_test: TestRequirements | None
+    scenario_labels: list[ScenarioLabels]
+    other_quality_issues: list[QualityIssueSummary]
+
+
 class CandidatePack(Contract):
     """Bounded evidence sent to the model for one candidate. No raw rows."""
 
@@ -359,14 +408,10 @@ class CandidatePack(Contract):
     permitted_test_templates: list[TestTemplateId]
     tool_allowlist: list[ToolName]
     token_budget: int = Field(gt=0)
+    answer_guide: AnswerGuide | None = None
 
 
 # --- Model output IR -------------------------------------------------------
-
-
-class ObservationStatement(Contract):
-    template_id: ObservationTemplateId
-    fact_ids: list[FactId] = Field(min_length=1, max_length=6)
 
 
 class CandidateRecommendation(Contract):
@@ -503,6 +548,20 @@ class ToolEvidence(Contract):
 # --- Analysis and validation -----------------------------------------------
 
 
+class ValidationIssue(Contract):
+    code: ValidationErrorCode
+    path: str = Field(max_length=200)
+    ref: str | None = None
+    detail: str = Field(max_length=300)
+
+
+class RejectedAttempt(Contract):
+    """Why one model answer was refused: codes, paths and IDs only, never model text."""
+
+    attempt: int = Field(ge=1)
+    errors: list[ValidationIssue] = Field(min_length=1, max_length=32)
+
+
 class CandidateAnalysis(Contract):
     candidate_id: CandidateId
     status: AnalysisStatus
@@ -512,13 +571,8 @@ class CandidateAnalysis(Contract):
     repairs: int = Field(ge=0)
     # Set with ``budget_exhausted``: the limit that ended the analysis.
     budget_reason: BudgetReason | None = None
-
-
-class ValidationIssue(Contract):
-    code: ValidationErrorCode
-    path: str = Field(max_length=200)
-    ref: str | None = None
-    detail: str = Field(max_length=300)
+    # Every refused answer, in order, so a rejection is diagnosable from the bundle.
+    rejected_attempts: list[RejectedAttempt] = Field(default_factory=list, max_length=8)
 
 
 class ValidatedRecommendation(Contract):

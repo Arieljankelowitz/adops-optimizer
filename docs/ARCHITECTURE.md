@@ -46,7 +46,7 @@ codes; code turns those choices into readable report wording.
 
 Each measured value has an evidence ID. `llm/validator.py` checks that references
 exist and match the segment, period, metric, unit and intended role. Invalid
-answers get a bounded repair attempt or are omitted. The renderer inserts numbers
+answers get up to two bounded repair attempts or are omitted. The renderer inserts numbers
 from those measured objects, not model-written numerical prose, and audits the
 rendered output. This keeps reported numbers traceable; it does **not** establish
 that the model's interpretation is correct or that a proposed test will work.

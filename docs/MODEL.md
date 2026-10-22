@@ -18,8 +18,10 @@ quality/footprint choice, not a claim that it wins a task-specific benchmark.
 
 [`deploy/modal_vllm.py`](../deploy/modal_vllm.py) serves the model with **vLLM on
 one Modal L40S**. The profile pins vLLM 0.32.0 and Transformers 5.19.0, limits
-the context to 16,384 tokens, and serves one generation at a time. Thinking is
-disabled so the output budget goes to the structured answer.
+the context to 32,768 tokens (prompts up to 28,672), and serves one generation
+at a time. Each answer is still capped at 2,048 tokens so it finishes within the
+per-request timeout. Thinking is disabled so the output budget goes to the
+structured answer.
 
 The stable endpoint follows this pattern (placeholder workspace only):
 

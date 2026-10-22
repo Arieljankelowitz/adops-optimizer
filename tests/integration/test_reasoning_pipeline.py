@@ -113,4 +113,6 @@ def test_explore_flows_through_identical_judgment_validator_and_ranking():
         "generations": 4,
         "ranking_calls": 1,
         "invalid_outputs": 0,
+        "explore_completed": 1,
+        "explore_proposals": 1,
     }

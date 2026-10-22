@@ -185,7 +185,7 @@ def test_plain_http_localhost_needs_the_test_only_switch() -> None:
 def test_request_over_the_profile_output_budget_is_refused() -> None:
     server = Server([])
     with pytest.raises(ModelConfigError):
-        _client(server).generate(_request(max_output_tokens=4096))
+        _client(server).generate(_request(max_output_tokens=4097))
     assert server.requests == []
 
 

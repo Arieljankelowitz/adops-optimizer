@@ -71,6 +71,16 @@ def peer_definition(
     return PeerDefinition(pid, fixed, varying)
 
 
+class ToolRefusedError(ValueError):
+    """A deterministic tool cannot answer this call (e.g. peers of a coarse slice).
+
+    The message is a static code. It is the model's mistake, so the analysis
+    loop tells the model and carries on; it never ends the run or the candidate.
+    """
+
+    progress_code = "tool_refused"
+
+
 def _scope(ctx, segment_id, period_id):
     if (
         ctx.run_namespace != ctx.metrics.run_namespace
@@ -82,10 +92,10 @@ def _scope(ctx, segment_id, period_id):
     )
     period = ctx.metrics.periods.get(period_id) or ctx.bundle.periods.get(period_id)
     if segment is None or period is None:
-        raise ValueError("unknown_tool_scope")
+        raise ToolRefusedError("unknown_tool_scope")
     # Arbitrary sensitivity-cohort recombination is deliberately not supported.
     if segment.cohort_id != FULL_INPUT:
-        raise ValueError("unsupported_tool_cohort")
+        raise ToolRefusedError("unsupported_tool_cohort")
     return segment, period
 
 
@@ -156,7 +166,7 @@ def breakdown(
     call = BreakdownArgs(segment_id=segment_id, by=by, period_id=period_id, limit=limit)
     segment, period = _scope(ctx, segment_id, period_id)
     if call.by in segment.filters:
-        raise ValueError("breakdown_dimension_already_fixed")
+        raise ToolRefusedError("breakdown_dimension_already_fixed")
     rows = _rows(ctx, period)
     for dim, label in segment.filters.items():
         rows = rows[rows[dim.value] == label]
@@ -188,7 +198,7 @@ def daily_trend(ctx: AnalysisContext, segment_id: str, period_id: str) -> ToolEv
     call = DailyTrendArgs(segment_id=segment_id, period_id=period_id)
     segment, period = _scope(ctx, segment_id, period_id)
     if (period.end - period.start).days > 366:
-        raise ValueError("daily_tool_period_too_long")
+        raise ToolRefusedError("daily_tool_period_too_long")
     b = FactBuilder(ctx.metrics, ctx.bundle.quality)
     coverage = _facts(
         b, segment, period, combined_stats(ctx.metrics, period, segment.filters)
@@ -265,7 +275,7 @@ def compare_to_peers(
     }
     definition = definitions.get(peer_definition_id)
     if definition is None or not all(d in segment.filters for d in Dimension):
-        raise ValueError("unknown_or_unmatched_peer_definition")
+        raise ToolRefusedError("unknown_or_unmatched_peer_definition")
     fixed = {d: segment.filters[d] for d in definition.fixed_dimensions}
     peer = make_segment(ctx.run_namespace, fixed, "excluding_" + segment.segment_id)
     b = FactBuilder(ctx.metrics, ctx.bundle.quality)
@@ -352,7 +362,7 @@ class AnalyticToolRouter(ToolRouter):
             )
         segments, periods = self._scopes[candidate_id]
         if call.segment_id not in segments or call.period_id not in periods:
-            raise ValueError("tool_outside_candidate_scope")
+            raise ToolRefusedError("tool_outside_candidate_scope")
         key = canonical_json(call.model_dump(mode="json"))
         if key not in self._cache:
             if isinstance(call, BreakdownArgs):

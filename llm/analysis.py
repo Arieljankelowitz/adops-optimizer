@@ -16,6 +16,7 @@ from contracts.enums import (
     MetricKey,
     NextStepKind,
     ToolName,
+    ValidationErrorCode,
     ValidityStatus,
 )
 from contracts.ids import IdPrefix, canonical_json, make_id
@@ -29,7 +30,9 @@ from contracts.models import (
     DailyTrendArgs,
     ExploreStep,
     NextStep,
+    RejectedAttempt,
     ToolCall,
+    ValidationIssue,
 )
 from contracts.runtime import (
     ChatMessage,
@@ -44,12 +47,31 @@ from llm.client import (
     ModelOutputError,
     ModelToolProtocolError,
 )
+from llm.answer import (
+    REPAIR_INSTRUCTION,
+    exception_issues,
+    explore_schema,
+    final_schema,
+    output_issues,
+    peer_segments,
+    repair_errors,
+    step_schema,
+)
 from llm.prompts import EXPLORE_PROMPT, build_candidate_messages, tool_view
 from llm.tokens import estimate_prompt_tokens
-from llm.tools import extend_bundle, peer_definition
+from llm.tools import ToolRefusedError, extend_bundle, peer_definition
+from pipeline.evidence import (
+    answer_guide,
+    issue_fact_ids,
+    observation_options,
+    scoped_issues,
+    split_issues,
+)
 
 # Room kept free after a tool result for the next turn's instruction.
 TURN_RESERVE_TOKENS = 256
+# Corrections per candidate; the validator refuses an analysis claiming more.
+MAX_REPAIRS = 2
 
 
 @dataclass
@@ -73,7 +95,7 @@ def reasoning_stats(client: ModelClient) -> ReasoningStats:
 
 
 def prompt_limit(client) -> int:
-    """Largest prompt the profile allows; 16,384 context minus the output reserve."""
+    """Largest prompt the profile allows: its context window minus the output reserve."""
     profile = getattr(client, "profile", None)
     return getattr(profile, "max_prompt_tokens", 12288)
 
@@ -90,14 +112,16 @@ def count_prompt(client, messages, tools=()) -> int:
     return estimate_prompt_tokens(messages, tools)
 
 
-def generate(client, budget, messages, model, name, *, tools=()):
+def generate(client, budget, messages, model, name, *, tools=(), schema=None):
     """No transport retries here: llm.client owns those and its independent cap.
 
+    ``schema`` narrows ``model``'s own schema for this request (see llm.answer).
     Raises ``ModelBudgetError`` carrying which limit was hit, before any request.
     """
     stats = reasoning_stats(client)
-    # 77 ordinary generations plus at most 4 discovery + 3*5 extra judgments.
-    generation_cap = 77 + (19 if budget.explore_enabled else 0)
+    # 15 candidates x (4 turns + 2 repairs) + ranking and its repair, plus at
+    # most 4 discovery turns and 3 x 6 judgments of the proposals.
+    generation_cap = 92 + (22 if budget.explore_enabled else 0)
     if stats.generations >= min(generation_cap, budget.max_network_attempts, 100):
         raise ModelBudgetError(
             "generation_budget_exhausted", BudgetReason.GENERATION_BUDGET
@@ -116,7 +140,7 @@ def generate(client, budget, messages, model, name, *, tools=()):
         ModelRequest(
             messages=messages,
             response_schema_name=name,
-            response_schema=model.model_json_schema(),
+            response_schema=schema or model.model_json_schema(),
             tools=list(tools),
             max_output_tokens=min(2048, getattr(profile, "max_output_tokens", 2048)),
             enable_thinking=False,
@@ -198,7 +222,12 @@ def _tool_facts(evidence, known, registry=None):
 def analyze_candidate(
     pack: CandidatePack, tools: ToolRouter, client: ModelClient, budget: RunBudget
 ) -> CandidateAnalysis:
-    """Four judgment turns, three executions, and one shared schema/grounding repair."""
+    """Four judgment turns, three executions, and two shared schema/grounding repairs.
+
+    Every refused answer is kept as a ``RejectedAttempt`` (codes, paths, IDs).
+    A repair turn shows the model its refused answer and, per error, the exact
+    change the answer guide requires.
+    """
     cid = pack.candidate.candidate_id
     stats = reasoning_stats(client)
     detector_ids = {c for c in stats.candidate_ids if c != cid}
@@ -219,9 +248,28 @@ def analyze_candidate(
     evidence, cache, known = [], {}, {f.fact_id: f for f in pack.facts}
     turns = repairs = executions = 0
     native = budget.native_tools_enabled
-    repair_errors = None
+    repair_issues = None
+    rejected: list[RejectedAttempt] = []
     # Set once a tool result cannot fit the prompt: judge on what the model has.
     force_final = False
+    guide = pack.answer_guide
+    # Statements the model may cite; tool results the model is shown add more.
+    options = list(guide.observation_options) if guide is not None else []
+    period = next(
+        (p for p in pack.periods if p.period_id == pack.candidate.period_id), None
+    )
+    thresholds = {r for i in pack.quality_issues for r in i.threshold_fact_ids}
+    tool_cap = min(budget.max_tool_calls_per_candidate, 3)
+
+    def scopes():
+        """Segment IDs, period IDs and the segments with matched peers in scope."""
+        segments = {s.segment_id: s for s in pack.segments} | {
+            f.segment.segment_id: f.segment for f in known.values()
+        }
+        periods = {p.period_id for p in pack.periods} | {
+            f.period.period_id for f in known.values()
+        }
+        return set(segments), periods, peer_segments(segments.values())
 
     def result(status, rec=None, reason=None):
         if status is not AnalysisStatus.COMPLETE:
@@ -236,15 +284,26 @@ def analyze_candidate(
             budget_reason=reason
             if status is AnalysisStatus.BUDGET_EXHAUSTED
             else None,
+            rejected_attempts=list(rejected),
         )
 
-    while turns < min(budget.max_turns_per_candidate, 4) or repair_errors is not None:
-        repair = repair_errors is not None
+    def refuse(issues, answer=None):
+        nonlocal repair_issues
+        stats.invalid_outputs += 1
+        rejected.append(RejectedAttempt(attempt=turns + repairs, errors=issues[:32]))
+        # The model sees what it answered; a cut-off or unparsable answer is
+        # not echoed back.
+        if answer is not None:
+            messages.append(ChatMessage(role="assistant", content=answer))
+        repair_issues = issues
+
+    while turns < min(budget.max_turns_per_candidate, 4) or repair_issues is not None:
+        repair = repair_issues is not None
         final_only = (
             repair or force_final or turns + 1 >= min(budget.max_turns_per_candidate, 4)
         )
         if repair:
-            if repairs >= min(budget.max_repairs_per_candidate, 1):
+            if repairs >= min(budget.max_repairs_per_candidate, MAX_REPAIRS):
                 return result(AnalysisStatus.REJECTED_INVALID)
             repairs += 1
             messages.append(
@@ -252,13 +311,13 @@ def analyze_candidate(
                     role="user",
                     content=canonical_json(
                         {
-                            "repair": "Return only a corrected final recommendation, no tools.",
-                            "error_codes": repair_errors,
+                            "repair": REPAIR_INSTRUCTION,
+                            "errors": repair_errors(repair_issues, pack),
                         }
                     ),
                 )
             )
-            repair_errors = None
+            repair_issues = None
         else:
             turns += 1
         messages.append(
@@ -269,9 +328,7 @@ def analyze_candidate(
                         "response": "final_recommendation"
                         if final_only
                         else "next_step",
-                        "remaining_tool_executions": max(
-                            0, min(budget.max_tool_calls_per_candidate, 3) - executions
-                        ),
+                        "remaining_tool_executions": max(0, tool_cap - executions),
                         "peer_definition_ids": [
                             peer_definition(pack.run_namespace, d).peer_definition_id
                             for d in Dimension
@@ -281,6 +338,7 @@ def analyze_candidate(
             )
         )
         try:
+            segment_ids, period_ids, peer_ids = scopes()
             response = generate(
                 client,
                 budget,
@@ -292,6 +350,16 @@ def analyze_candidate(
                 )
                 if native and not final_only
                 else (),
+                schema=final_schema(pack, options)
+                if final_only
+                else step_schema(
+                    pack,
+                    options,
+                    segment_ids,
+                    period_ids,
+                    executions < tool_cap,
+                    peer_ids,
+                ),
             )
             call = native_call = None
             if response.tool_calls:
@@ -312,12 +380,7 @@ def analyze_candidate(
                     or call.tool not in tools.allowed_tools
                 ):
                     raise ValueError("tool_not_allowed")
-                allowed_segments = {s.segment_id for s in pack.segments} | {
-                    f.segment.segment_id for f in known.values()
-                }
-                allowed_periods = {p.period_id for p in pack.periods} | {
-                    f.period.period_id for f in known.values()
-                }
+                allowed_segments, allowed_periods, _ = scopes()
                 if (
                     call.segment_id not in allowed_segments
                     or call.period_id not in allowed_periods
@@ -325,12 +388,50 @@ def analyze_candidate(
                     raise ValueError("tool_outside_candidate_scope")
                 key = canonical_json(call.model_dump(mode="json"))
                 if key not in cache:
-                    if executions >= min(budget.max_tool_calls_per_candidate, 3):
+                    if executions >= tool_cap:
                         return result(
                             AnalysisStatus.BUDGET_EXHAUSTED, reason=BudgetReason.TOOL_BUDGET
                         )
                     executions += 1
-                    ev = tools.dispatch(cid, call)
+                    try:
+                        ev = tools.dispatch(cid, call)
+                    except ToolRefusedError as exc:
+                        # Tell the model which call failed and why; the turn
+                        # and the execution are spent, the candidate is not.
+                        stats.invalid_outputs += 1
+                        issue = ValidationIssue(
+                            code=ValidationErrorCode.SCHEMA_INVALID,
+                            path="/tool_call",
+                            detail=f"tool refused: {exc}",
+                        )
+                        rejected.append(
+                            RejectedAttempt(attempt=turns + repairs, errors=[issue])
+                        )
+                        refusal = canonical_json(
+                            {
+                                "tool_refused": str(exc),
+                                "instruction": "That tool cannot answer for that "
+                                "scope. Choose another call or answer.",
+                            }
+                        )
+                        messages.extend(
+                            [
+                                ChatMessage(
+                                    role="assistant", content="", tool_calls=[native_call]
+                                ),
+                                ChatMessage(
+                                    role="tool",
+                                    content=refusal,
+                                    tool_call_id=native_call["id"],
+                                ),
+                            ]
+                            if native_call
+                            else [
+                                ChatMessage(role="assistant", content=response.content),
+                                ChatMessage(role="user", content=refusal),
+                            ]
+                        )
+                        continue
                     if ev.run_namespace != pack.run_namespace or ev.tool_call != call:
                         raise ValueError("tool_response_mismatch")
                     cache[key] = ev
@@ -341,7 +442,26 @@ def analyze_candidate(
                 facts = _tool_facts(
                     ev, known, tool_bundle.facts if tool_bundle is not None else None
                 )
-                content = canonical_json(tool_view(ev, facts))
+                view = tool_view(ev, facts)
+                new_options = []
+                if guide is not None and period is not None:
+                    shown = {**known, **{f.fact_id: f for f in facts}}
+                    new_options = [
+                        o
+                        for o in observation_options(
+                            pack.candidate,
+                            period,
+                            shown,
+                            guide.effective_restrictions,
+                            thresholds,
+                        )
+                        if o not in options
+                    ]
+                    if new_options:
+                        view["new_observation_options"] = [
+                            o.model_dump(mode="json") for o in new_options
+                        ]
+                content = canonical_json(view)
                 if native_call:
                     exchange = [
                         ChatMessage(
@@ -369,6 +489,7 @@ def analyze_candidate(
                     force_final = True
                 else:
                     messages.extend(exchange)
+                    options.extend(new_options)
                 continue
             _check_recommendation(rec, pack)
             completed = result(AnalysisStatus.COMPLETE, rec)
@@ -378,8 +499,7 @@ def analyze_candidate(
             if validate is not None:
                 verdict = validate(completed)
                 if not verdict.accepted:
-                    stats.invalid_outputs += 1
-                    repair_errors = sorted({e.code.value for e in verdict.errors})
+                    refuse(list(verdict.errors), response.content or None)
                     continue
             return completed
         except ModelBudgetError as exc:
@@ -389,14 +509,13 @@ def analyze_candidate(
                 return result(AnalysisStatus.TRANSPORT_FAILED)
             native = False
         except ModelOutputError as exc:
-            stats.invalid_outputs += 1
             if native and not repair:
+                stats.invalid_outputs += 1
                 native = False
                 continue
-            repair_errors = [e.split(":", 1)[0][:80] for e in exc.errors]
-        except (ValidationError, ValueError, TypeError, KeyError):
-            stats.invalid_outputs += 1
-            repair_errors = ["invalid_schema_scope_or_tool"]
+            refuse(output_issues(exc.errors))
+        except (ValidationError, ValueError, TypeError, KeyError) as exc:
+            refuse(exception_issues(exc))
         except ModelClientError:
             return result(AnalysisStatus.TRANSPORT_FAILED)
     return result(AnalysisStatus.BUDGET_EXHAUSTED, reason=BudgetReason.TURN_BUDGET)
@@ -425,6 +544,14 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
     original = bundle
     stats.explore_status = "started"
     try:
+        offered_segments = sorted(
+            (s for s in bundle.segments.values() if s.cohort_id == "full_input"),
+            key=lambda s: (len(s.filters), s.segment_id),
+        )[:12]
+        offered_periods = sorted(
+            bundle.periods.values(),
+            key=lambda p: (-len(p.included_dates), p.period_id),
+        )[:3]
         messages = [
             ChatMessage(role="system", content=EXPLORE_PROMPT),
             ChatMessage(
@@ -451,24 +578,8 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                             }
                             for c in bundle.candidates.values()
                         ],
-                        "segments": [
-                            s.model_dump(mode="json")
-                            for s in sorted(
-                                (
-                                    s
-                                    for s in bundle.segments.values()
-                                    if s.cohort_id == "full_input"
-                                ),
-                                key=lambda s: (len(s.filters), s.segment_id),
-                            )[:12]
-                        ],
-                        "periods": [
-                            p.model_dump(mode="json")
-                            for p in sorted(
-                                bundle.periods.values(),
-                                key=lambda p: (-len(p.included_dates), p.period_id),
-                            )[:3]
-                        ],
+                        "segments": [s.model_dump(mode="json") for s in offered_segments],
+                        "periods": [p.model_dump(mode="json") for p in offered_periods],
                     }
                 ),
             ),
@@ -494,7 +605,24 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                 )
             )
             response = generate(
-                client, budget, messages, ExploreStep, "explore_next_step"
+                client,
+                budget,
+                messages,
+                ExploreStep,
+                "explore_next_step",
+                schema=explore_schema(
+                    bundle.run_namespace,
+                    [known[r] for r in sorted(returned)],
+                    {s.segment_id for s in offered_segments}
+                    | {f.segment.segment_id for f in known.values()},
+                    {p.period_id for p in offered_periods}
+                    | {f.period.period_id for f in known.values()},
+                    final
+                    or executions >= min(budget.max_explore_tool_calls, 3),
+                    peer_segments(
+                        [*offered_segments, *(f.segment for f in known.values())]
+                    ),
+                ),
             )
             step = ExploreStep.model_validate_json(response.content)
             if step.kind == "final":
@@ -514,7 +642,19 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                 executions += 1
                 # Discovery has no candidate yet; runner provides a namespace-
                 # checked dispatch_explore, not a fake detector candidate ID.
-                ev = tools.dispatch_explore(call)
+                try:
+                    ev = tools.dispatch_explore(call)
+                except ToolRefusedError as exc:
+                    messages.extend(
+                        [
+                            ChatMessage(role="assistant", content=response.content),
+                            ChatMessage(
+                                role="user",
+                                content=canonical_json({"tool_refused": str(exc)}),
+                            ),
+                        ]
+                    )
+                    continue
                 if ev.tool_call != call:
                     raise ValueError("explore_tool_response_mismatch")
                 bundle = extend_bundle(bundle, ev)
@@ -541,16 +681,23 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
             messages.append(result_message)
         packs = []
         candidates, pack_map = dict(bundle.candidates), dict(bundle.packs)
+        # Same budget as the run's rule packs; the request gate still counts.
+        token_budget = max(
+            (p.token_budget for p in bundle.packs.values()),
+            default=prompt_limit(client) // 2,
+        )
         for proposal in proposals:
+            # An unsupported proposal is dropped on its own; the others still
+            # go to the ordinary judgment and strict validation.
             if not set(proposal.fact_ids) <= returned:
-                raise ValueError("explore_unreturned_fact")
+                continue
             facts = [bundle.facts[r] for r in proposal.fact_ids]
             if any(
                 (f.segment.segment_id, f.period.period_id, f.segment.cohort_id)
                 != (proposal.segment_id, proposal.period_id, "full_input")
                 for f in facts
             ):
-                raise ValueError("explore_scope_mismatch")
+                continue
             if any(
                 c.segment_id == proposal.segment_id
                 and c.period_id == proposal.period_id
@@ -581,7 +728,16 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                 )
             )
             if len(contrary) > 12:
-                raise ValueError("explore_counter_evidence_does_not_fit")
+                continue
+            segment = bundle.segments[proposal.segment_id]
+            period = bundle.periods[proposal.period_id]
+            issues = scoped_issues(
+                bundle.quality.issues,
+                bundle.segments,
+                bundle.periods,
+                proposal.segment_id,
+                proposal.period_id,
+            )
             candidate = Candidate(
                 origin="model_proposed",
                 candidate_id=cid,
@@ -597,27 +753,44 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                     f.fact_id for f in target_facts if f.comparison is not None
                 ],
                 counter_evidence_fact_ids=contrary,
-                quality_issue_ids=[q.issue_id for q in bundle.quality.issues],
+                quality_issue_ids=[q.issue_id for q in issues],
                 overlap_group_ids=[],
             )
+            # The same issue shrink and answer guide as a rule candidate's pack.
+            detailed, summarised = split_issues(
+                candidate, segment, issues, bundle.segments
+            )
+            pack_facts = dict(known)
+            for ref in issue_fact_ids(detailed):
+                pack_facts[ref] = bundle.facts[ref]
+            segment_ids = {f.segment.segment_id for f in pack_facts.values()}
+            segment_ids.add(proposal.segment_id)
+            period_ids = {f.period.period_id for f in pack_facts.values()}
+            period_ids.add(proposal.period_id)
+            for issue in detailed:
+                segment_ids.update(issue.segment_ids)
+                period_ids.update(issue.period_ids)
             # Keep the complete discovery evidence, including contrary facts;
             # no assumptions/scenarios are minted by the model.
             pack = CandidatePack(
                 run_namespace=bundle.run_namespace,
                 candidate=candidate,
-                quality_issues=bundle.quality.issues,
-                segments=list(
-                    {f.segment.segment_id: f.segment for f in known.values()}.values()
-                ),
-                periods=list(
-                    {f.period.period_id: f.period for f in known.values()}.values()
-                ),
-                facts=list(known.values()),
+                quality_issues=detailed,
+                segments=[
+                    bundle.segments[r] for r in sorted(segment_ids) if r in bundle.segments
+                ],
+                periods=[
+                    bundle.periods[r] for r in sorted(period_ids) if r in bundle.periods
+                ],
+                facts=list(pack_facts.values()),
                 assumptions=[],
                 scenarios=[],
                 permitted_test_templates=[],
                 tool_allowlist=list(ToolName),
-                token_budget=12288,
+                token_budget=token_budget,
+                answer_guide=answer_guide(
+                    candidate, segment, period, issues, summarised, pack_facts, [], [], []
+                ),
             )
             candidates[cid], pack_map[cid] = candidate, pack
             packs.append(pack)

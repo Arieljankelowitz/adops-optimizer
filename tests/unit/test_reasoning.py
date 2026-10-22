@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.config import RunBudget
-from contracts.enums import AnalysisStatus, Dimension, ToolName
+from contracts.enums import AnalysisStatus, Dimension, ToolName, ValidationErrorCode
 from contracts.ids import IdPrefix, make_id
 from contracts.models import (
     CandidatePack,
@@ -20,7 +20,7 @@ from contracts.models import (
 from contracts.runtime import FactRegistry, ModelResponse
 from llm.analysis import analyze_candidate, reasoning_stats
 from llm.client import ModelAuthError, ModelOutputError
-from llm.prompts import SYSTEM_PROMPT, build_candidate_messages, fact_view, facts_view
+from llm.prompts import CANDIDATE_PROMPT, build_candidate_messages, fact_view, facts_view
 from llm.ranking import RankingError, rank_recommendations
 from scripts.export_contracts import build_examples
 
@@ -142,13 +142,20 @@ def test_identical_calls_are_cached(pack):
 @pytest.mark.parametrize(
     "bad", ["null", "{", "{}", "[]", '{"kind":"final","recommendation":null}']
 )
-def test_malformed_or_null_one_repair_only(pack, bad):
-    client = FakeClient([bad, bad])
+def test_malformed_or_null_two_repairs_only(pack, bad):
+    client = FakeClient([bad, bad, bad])
     result = analyze_candidate(pack, FakeRouter(pack), client, RunBudget())
     assert result.status is AnalysisStatus.REJECTED_INVALID
-    assert result.generation_turns == 1 and result.repairs == 1
-    assert len(client.requests) == 2
-    assert client.requests[1].response_schema_name == "candidate_final"
+    assert result.generation_turns == 1 and result.repairs == 2
+    assert len(client.requests) == 3
+    assert {r.response_schema_name for r in client.requests[1:]} == {"candidate_final"}
+    # Each refusal is kept, as codes and paths only: never the model's text.
+    assert [a.attempt for a in result.rejected_attempts] == [1, 2, 3]
+    for attempt in result.rejected_attempts:
+        assert {e.code for e in attempt.errors} == {ValidationErrorCode.SCHEMA_INVALID}
+        for e in attempt.errors:
+            assert e.path == "$" or e.path.startswith("/")
+            assert "{" not in e.detail and "null" not in e.detail
 
 
 def test_malformed_repair_can_succeed(pack):
@@ -175,7 +182,7 @@ def test_malformed_repair_can_succeed(pack):
         "overlap_conflict",
     ],
 )
-def test_grounding_and_schema_share_one_repair(pack, error_code):
+def test_grounding_and_schema_share_two_repairs(pack, error_code):
     router = FakeRouter(pack)
     router.validate_analysis = lambda result: ValidationRejected(
         errors=[
@@ -186,10 +193,19 @@ def test_grounding_and_schema_share_one_repair(pack, error_code):
             )
         ]
     )
-    client = FakeClient([final(pack), recommendation(pack).model_dump(mode="json")])
+    answer = recommendation(pack).model_dump(mode="json")
+    client = FakeClient([final(pack), answer, answer])
     result = analyze_candidate(pack, router, client, RunBudget())
     assert result.status is AnalysisStatus.REJECTED_INVALID
-    assert len(client.requests) == 2 and result.repairs == 1
+    assert len(client.requests) == 3 and result.repairs == 2
+    assert [[e.code.value for e in a.errors] for a in result.rejected_attempts] == [
+        [error_code]
+    ] * 3
+    # The repair turn shows the refused answer, then the named error.
+    repair = client.requests[1].messages
+    assert repair[-3].role == "assistant" and json.loads(repair[-3].content) == final(pack)
+    errors = json.loads(repair[-2].content)["errors"]
+    assert [(e["code"], e["path"]) for e in errors] == [(error_code, "recommendation")]
 
 
 def test_auth_is_not_retried_or_repaired(pack):
@@ -200,9 +216,9 @@ def test_auth_is_not_retried_or_repaired(pack):
 
 
 def test_final_turn_requires_final_no_tools(pack):
-    client = FakeClient([call_step(pack)] * 5)
+    client = FakeClient([call_step(pack)] * 6)
     result = analyze_candidate(pack, FakeRouter(pack), client, RunBudget())
-    assert len(client.requests) == 5  # four turns + shared repair
+    assert len(client.requests) == 6  # four turns + two shared repairs
     assert result.status is AnalysisStatus.REJECTED_INVALID
     assert (
         not client.requests[3].tools
@@ -223,7 +239,7 @@ def test_tool_execution_budget(pack):
 def test_scope_and_allowlist_fail_closed(pack):
     call = call_step(pack)
     call["tool_call"]["segment_id"] = "G_" + "0" * 16
-    client = FakeClient([call, "null"])
+    client = FakeClient([call, "null", "null"])
     router = FakeRouter(pack)
     assert (
         analyze_candidate(pack, router, client, RunBudget()).status
@@ -327,7 +343,7 @@ def test_prompt_injection_is_data_not_system_or_executable_output(pack):
     )
     poisoned = pack.model_copy(update={"segments": [segment]})
     messages = build_candidate_messages(poisoned)
-    assert messages[0].content == SYSTEM_PROMPT and malicious not in messages[0].content
+    assert messages[0].content == CANDIDATE_PROMPT and malicious not in messages[0].content
     assert (
         malicious
         in json.loads(messages[1].content)["untrusted_evidence"][
@@ -343,7 +359,7 @@ def test_prompt_injection_is_data_not_system_or_executable_output(pack):
     result = analyze_candidate(
         poisoned,
         FakeRouter(pack),
-        FakeClient([{"kind": "final", "recommendation": bad}, "null"]),
+        FakeClient([{"kind": "final", "recommendation": bad}, "null", "null"]),
         RunBudget(),
     )
     assert result.status is AnalysisStatus.REJECTED_INVALID

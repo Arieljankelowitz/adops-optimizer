@@ -29,9 +29,10 @@ MARGIN = 1.02
 # Chat-template framing per message and for the generation prompt.
 MESSAGE_OVERHEAD_TOKENS = 8
 GENERATION_PROMPT_TOKENS = 8
-# System prompt, prompt wrapper and the turn instruction around a serialized
-# pack. The evidence gate adds this to the pack text it counts.
-PROMPT_OVERHEAD_TOKENS = 512
+# Candidate system prompt (with its worked example), prompt wrapper and the
+# turn instruction around a serialized pack. The evidence gate adds this to the
+# pack text it counts; a test keeps it above their estimate.
+PROMPT_OVERHEAD_TOKENS = 1536
 
 
 def estimate_text_tokens(text: str) -> int:

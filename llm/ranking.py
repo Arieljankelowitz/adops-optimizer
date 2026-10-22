@@ -23,6 +23,71 @@ def _refs(rec):
     )
 
 
+def _scope_fact(rec, registry):
+    return next(
+        (
+            f
+            for f in registry.values()
+            if f.segment.segment_id == rec.segment_id
+            and f.period.period_id == rec.period_id
+        ),
+        None,
+    )
+
+
+def _scopes_overlap(scope, previous) -> bool:
+    compatible = all(
+        previous.segment.filters.get(d, label) == label
+        for d, label in scope.segment.filters.items()
+    )
+    return (
+        compatible
+        and scope.segment.cohort_id == previous.segment.cohort_id
+        and bool(set(scope.period.included_dates) & set(previous.period.included_dates))
+    )
+
+
+def conflicting_pairs(validated, registry) -> list[list[str]]:
+    """Recommendation pairs a ranking may not select together (``check_ranking``'s rule)."""
+    scoped = [
+        (r.recommendation_id, _scope_fact(r.recommendation, registry), set(r.recommendation.overlap_group_ids))
+        for r in sorted(validated, key=lambda r: r.recommendation_id)
+    ]
+    pairs = []
+    for i, (left, left_scope, left_groups) in enumerate(scoped):
+        for right, right_scope, right_groups in scoped[i + 1 :]:
+            if left_groups & right_groups or (
+                left_scope is not None
+                and right_scope is not None
+                and _scopes_overlap(right_scope, left_scope)
+            ):
+                pairs.append([left, right])
+    return pairs
+
+
+def ranking_schema(validated) -> dict:
+    """The ranking schema over these validated IDs and their evidence only."""
+    schema = RankingIR.model_json_schema()
+    ids = [r.recommendation_id for r in validated]
+    facts = sorted(set().union(*(_refs(r) for r in validated)))
+    one_id = {"enum": ids}
+    schema["properties"]["ranked_recommendation_ids"] = {
+        "type": "array",
+        "items": one_id,
+        "minItems": 1,
+        "maxItems": min(10, len(ids)),
+    }
+    merge = schema["$defs"]["MergeInstruction"]["properties"]
+    merge["target_recommendation_id"] = one_id
+    merge["source_recommendation_ids"]["items"] = one_id
+    theme = schema["$defs"]["SummaryTheme"]["properties"]
+    theme["recommendation_ids"]["items"] = one_id
+    theme["fact_ids"]["items"] = {"enum": facts} if facts else {}
+    if not facts:
+        theme["fact_ids"]["maxItems"] = 0
+    return schema
+
+
 def check_ranking(ranking, validated, registry):
     by_id = {r.recommendation_id: r for r in validated}
     ids = ranking.ranked_recommendation_ids
@@ -81,27 +146,10 @@ def check_ranking(ranking, validated, registry):
     overlaps, scopes = set(), []
     for rid in ids:
         rec = by_id[rid].recommendation
-        scope = next(
-            (
-                f
-                for f in registry.values()
-                if f.segment.segment_id == rec.segment_id
-                and f.period.period_id == rec.period_id
-            ),
-            None,
-        )
+        scope = _scope_fact(rec, registry)
         if scope is not None:
             for previous in scopes:
-                compatible = all(
-                    previous.segment.filters.get(d, label) == label
-                    for d, label in scope.segment.filters.items()
-                )
-                if (
-                    compatible
-                    and scope.segment.cohort_id == previous.segment.cohort_id
-                    and set(scope.period.included_dates)
-                    & set(previous.period.included_dates)
-                ):
+                if _scopes_overlap(scope, previous):
                     raise RankingError("overlapping_ranked_scopes")
             scopes.append(scope)
         groups = set(rec.overlap_group_ids)
@@ -157,6 +205,8 @@ def rank_recommendations(
                         r.model_dump(mode="json") for r in actionable
                     ],
                     "evidence": facts_view([registry[r] for r in sorted(refs)]),
+                    # Computed by the same rule the ranking check applies.
+                    "conflicting_pairs": conflicting_pairs(actionable, registry),
                     "merge_policy": "Identical scopes only, with every source fact and caveat already in the validated target; otherwise do not merge.",
                     "omission_policy": "Unselected IDs remain in the audit trail; never rewrite them.",
                 }
@@ -172,7 +222,12 @@ def rank_recommendations(
         state.ranking_calls += 1
         try:
             response = generate(
-                client, budget, messages, RankingIR, "recommendation_ranking"
+                client,
+                budget,
+                messages,
+                RankingIR,
+                "recommendation_ranking",
+                schema=ranking_schema(actionable),
             )
             ranking = RankingIR.model_validate_json(response.content)
             check_ranking(ranking, actionable, registry)
