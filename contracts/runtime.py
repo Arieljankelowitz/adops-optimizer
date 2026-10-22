@@ -49,29 +49,32 @@ class _Registry[T: (Fact, Assumption, Scenario)]:
     _id_field: str
 
     def __init__(self, namespace: str, items: Iterable[T] = ()) -> None:
-        self.namespace = namespace
-        self._items: dict[str, T] = {}
-        self._add(items)
-
-    def _add(self, items: Iterable[T]) -> None:
+        self._namespace = namespace
+        records: dict[str, T] = {}
         for item in items:
             key = getattr(item, self._id_field)
-            if item.run_namespace != self.namespace:
+            if item.run_namespace != namespace:
                 raise ValueError(f"{key} belongs to another run namespace")
-            if key in self._items:
+            if key in records:
                 raise ValueError(f"{key} is already registered; records are immutable")
-            self._items[key] = item
+            # Frozen pydantic models still contain mutable lists/dicts. Own a
+            # snapshot and never hand its nested containers to a caller.
+            records[key] = item.model_copy(deep=True)
+        self._items = MappingProxyType(records)
+
+    @property
+    def namespace(self) -> str:
+        return self._namespace
 
     def extended(self, items: Iterable[T]) -> "_Registry[T]":
-        new = type(self)(self.namespace, self._items.values())
-        new._add(items)
-        return new
+        return type(self)(self.namespace, (*self._items.values(), *items))
 
     def get(self, key: str) -> T | None:
-        return self._items.get(key)
+        item = self._items.get(key)
+        return item.model_copy(deep=True) if item is not None else None
 
     def __getitem__(self, key: str) -> T:
-        return self._items[key]
+        return self._items[key].model_copy(deep=True)
 
     def __contains__(self, key: object) -> bool:
         return key in self._items
@@ -83,7 +86,7 @@ class _Registry[T: (Fact, Assumption, Scenario)]:
         return len(self._items)
 
     def values(self) -> list[T]:
-        return list(self._items.values())
+        return [item.model_copy(deep=True) for item in self._items.values()]
 
 
 class FactRegistry(_Registry[Fact]):
@@ -194,6 +197,10 @@ class EvidenceBundle:
     overlap_groups: Mapping[str, OverlapGroup]
     quality: QualityReport
     packs: Mapping[str, CandidatePack]
+    # Ranking is reference-only and can resolve only previously accepted IR.
+    validated_recommendations: Mapping[str, ValidatedRecommendation] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 @dataclass(frozen=True)

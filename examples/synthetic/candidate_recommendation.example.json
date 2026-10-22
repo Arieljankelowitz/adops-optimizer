@@ -1,8 +1,8 @@
 {
   "assumption_ids": [
-    "A_a64e7fe2406a806a"
+    "A_bf6baa14b573a95f"
   ],
-  "candidate_id": "C_700aab4beb619151",
+  "candidate_id": "C_17695f77cce2b970",
   "confidence_in_observation": "medium",
   "counter_evidence_fact_ids": [],
   "decision": "recommend_test",
@@ -13,16 +13,16 @@
   "observation_statements": [
     {
       "fact_ids": [
-        "F_c135c8305cdd982e",
-        "F_a0dd27a3453d0e7a",
-        "F_97043af6a8d458ca"
+        "F_341b13eab6b7a3dd",
+        "F_7c27bcce5ffd7bbb",
+        "F_bb75982385c0ca2d"
       ],
       "template_id": "metric_vs_baseline"
     }
   ],
   "origin": "detector",
   "overlap_group_ids": [],
-  "period_id": "P_62bfafc25ae0d8d1",
+  "period_id": "P_33772305a17781ae",
   "prerequisite_codes": [
     "confirm_eligible_inventory"
   ],
@@ -30,9 +30,9 @@
     "demand_saturation"
   ],
   "scenario_ids": [
-    "S_1c54d0c4f7be14de"
+    "S_ef8c55f4a0702450"
   ],
-  "segment_id": "G_041b3b775a4fc24a",
+  "segment_id": "G_f49a462c043bccf6",
   "success_metric_keys": [
     "profit_per_million_requests",
     "profit"

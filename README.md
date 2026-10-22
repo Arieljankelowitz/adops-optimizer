@@ -20,13 +20,13 @@ committed to this repository; only independently generated synthetic data is.
 | Self-hosted model deployment (`deploy/`), profiles and fail-closed client | done; see [`deploy/README.md`](deploy/README.md) |
 | Aggregation, all eight detector families and conditional scenarios | done |
 | Report renderer, run bundle, runner, CLI, Streamlit app | done, against synthetic run fixtures |
-| Evidence builder and validator | in progress (stubs raise `NotImplementedError`) |
-| Prompts, analysis, tools and ranking | implemented; offline mock-client acceptance, pending evidence/validator integration |
+| Evidence builder and strict reference/role validator | done; synthetic/adversarial tests, no model required |
+| Prompts, analysis, tools and ranking | implemented; offline mock-client acceptance, pending live acceptance |
 
-Until the remaining modules land, the app's **cached demo run** and the CLI's
-`demo` command show the complete flow on a synthetic run. A live run loads the
-file, checks quality, aggregates, detects candidates and refines quality, then
-stops at the evidence stage with a clear message instead of crashing.
+The app's **cached demo run** and the CLI's `demo` command show the complete flow
+on a synthetic run without inference. A run without a model
+profile now completes quality checks, analytics, evidence and rendering as an
+explicitly labelled **deterministic-only** diagnostic report.
 
 Analytics (`pipeline/metrics.py`, `detectors.py`, `scenarios.py`): observed
 groups only, rates as ratios of sums with null-with-reason denominators,
@@ -34,6 +34,25 @@ eligibility gates with 0.5x/2x sensitivity and a stability gate, candidates
 with daily, peer, coverage, concentration and contrary evidence plus an
 overlap graph, and code-only conditional scenarios. Thresholds are versioned
 defaults in `AnalyticsConfig` and `DetectorConfig`.
+
+Evidence reuses detector facts and promotes quality facts without changing their
+IDs. Registries snapshot nested containers and extend by returning a new registry.
+`pipeline.evidence.serialize_pack(pack)` is the compact model-facing JSON view;
+full provenance stays in the private bundle. Packs retain all applicable warnings,
+triggers, counter-evidence and scenario dependencies. Only redundant daily/peer
+rows may be trimmed. Default limits are fifteen candidates, 40,960 UTF-8 bytes per
+pack and a 10,240-token pack budget; irreducible oversized packs fail closed.
+`build_evidence(..., count_tokens=deployed_tokenizer)` enforces the token limit.
+Without that callback only the byte limit is checked: a model orchestrator must
+count the complete prompt with the deployed tokenizer before any request, including
+instructions/tools and the profile's output/context reserve. Bytes are not tokens.
+
+The validator reparses strict reference-only IR, checks scope/cohort/period,
+metric/unit/lineage/direction, quality gates, labelled approved assumptions and
+code-recomputed conditional scenarios. Ranking resolves only previously validated
+recommendations; unproven unions and duplicate impacts are refused. Optional
+`validate_rendered_report` audits exact sourced value spans and source roles;
+the renderer also runs its warning/metadata audit. Neither validates causality.
 
 ## Architecture
 
@@ -380,10 +399,10 @@ multi-partner comparison and an optional fast triage step.
 
 ```text
 contracts/          shared data contracts (pydantic v2), IDs, templates, JSON Schemas
-pipeline/           load, quality, metrics, detectors, scenarios (implemented);
-                    evidence (stub); scope.py shared segment/period IDs
-llm/                client, profiles, prompts, analysis, tools, ranking (implemented);
-                    validator (stub)
+pipeline/           load, quality, metrics, detectors, scenarios, evidence (implemented);
+                    scope.py shared segment/period IDs
+llm/                client, profiles, validator, prompts, analysis, tools,
+                    ranking (implemented)
 report/
   render.py         Markdown renderer and post-render audit
   text.py           reviewed wording (no digits)

@@ -192,7 +192,11 @@ def audit_report(report: RenderedReport, run: ValidatedRun) -> RenderAudit:
     """Every digit must sit inside a span (or a static allowlisted phrase) whose source resolves."""
     md = report.markdown
     covered = bytearray(len(md))
+    invalid_bounds = False
     for span in report.spans:
+        if not 0 <= span.start < span.end <= len(md):
+            invalid_bounds = True
+            continue
         covered[span.start : span.end] = b"\x01" * (span.end - span.start)
     for phrase in STATIC_ALLOWLIST:
         for m in re.finditer(re.escape(phrase), md):
@@ -203,6 +207,15 @@ def audit_report(report: RenderedReport, run: ValidatedRun) -> RenderAudit:
             uncovered.append(m.group())
     known = known_source_ids(run)
     unresolved = sorted({s.source_id for s in report.spans if s.source_id not in known})
+    if invalid_bounds:
+        unresolved.append("invalid_span_bounds")
+    # A known source ID is not permission to place arbitrary numbers beneath
+    # it, change a role or exempt numeric-looking labels elsewhere. Replay the
+    # deterministic renderer against this run's immutable objects and require
+    # exact text AND spans. This also catches contaminated cached report text.
+    expected = _Renderer(run).render()
+    if report != expected:
+        unresolved.append("render_replay_mismatch")
     return RenderAudit(tuple(uncovered), tuple(unresolved))
 
 

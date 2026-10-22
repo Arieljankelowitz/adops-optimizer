@@ -515,9 +515,14 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
                               "optional_explore_judgment_failed", cid)
         progress.check_cancel(ProgressStage.CANDIDATE_ANALYSIS)
 
-    result.bundle = bundle
+    # Both the repair hook and the final ranking gate must resolve the same
+    # already-accepted recommendations, including optional exploration.
+    ranking_bundle = replace(bundle, validated_recommendations=MappingProxyType({
+        r.recommendation_id: r for r in result.recommendations
+    }))
+    result.bundle = ranking_bundle
     # Ranking's sole repair also covers lane C grounding/overlap failures.
-    setattr(client, "_validate_ranking", lambda output: stages.validate_analysis(output, bundle))
+    setattr(client, "_validate_ranking", lambda output: stages.validate_analysis(output, ranking_bundle))
     actionable = [r for r in result.recommendations
                   if r.recommendation.decision in (Decision.RECOMMEND_TEST,
                                                    Decision.INVESTIGATE_FIRST)]
@@ -529,7 +534,7 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
         try:
             ranking = stages.rank_recommendations(result.recommendations, bundle.facts, client,
                                                   budget)
-            verdict = stages.validate_analysis(ranking, bundle)
+            verdict = stages.validate_analysis(ranking, ranking_bundle)
         except NotImplementedError:
             progress.emit(ProgressStage.RANKING, ProgressState.FAILED, "ranking_not_implemented")
             complete = False
