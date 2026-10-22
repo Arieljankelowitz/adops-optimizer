@@ -328,6 +328,7 @@ class OverlapGroup(Contract):
 
 
 class Candidate(Contract):
+    origin: Literal["detector", "model_proposed"] = "detector"
     candidate_id: CandidateId
     family: DetectorFamily
     segment_id: SegmentId
@@ -370,6 +371,7 @@ class ObservationStatement(Contract):
 class CandidateRecommendation(Contract):
     """The model's per-candidate output: references and codes only."""
 
+    origin: Literal["detector", "model_proposed"] = "detector"
     candidate_id: CandidateId
     decision: Decision
     segment_id: SegmentId
@@ -437,6 +439,28 @@ class NextStep(Contract):
             ok = self.recommendation is not None and self.tool_call is None
         if not ok:
             raise ValueError("next step must carry exactly the payload its kind names")
+        return self
+
+
+class ExploreProposal(Contract):
+    family: DetectorFamily
+    segment_id: SegmentId
+    period_id: PeriodId
+    fact_ids: list[FactId] = Field(min_length=1, max_length=8)
+
+
+class ExploreStep(Contract):
+    kind: Literal["call_tool", "final"]
+    tool_call: ToolCall | None = None
+    proposals: list[ExploreProposal] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def _explore_payload(self) -> Self:
+        if self.kind == "call_tool":
+            if self.tool_call is None or self.proposals:
+                raise ValueError("explore tool turn requires only a tool call")
+        elif self.tool_call is not None:
+            raise ValueError("explore final cannot call a tool")
         return self
 
 
@@ -536,6 +560,8 @@ class RunManifest(Contract):
     # no model ran (deterministic-only runs).
     model_id: str | None = None
     model_revision: str | None = None
+    model_call_counts: dict[str, int] = Field(default_factory=dict)
+    incomplete_candidate_ids: list[CandidateId] = Field(default_factory=list)
 
 
 class ProgressEvent(Contract):

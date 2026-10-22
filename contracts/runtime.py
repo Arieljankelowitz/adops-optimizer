@@ -227,8 +227,10 @@ class ValidatedRun:
 
 
 class ChatMessage(Contract):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: str
+    tool_call_id: str | None = None
+    tool_calls: list[dict[str, object]] | None = None
 
 
 class ModelRequest(Contract):
@@ -236,6 +238,8 @@ class ModelRequest(Contract):
     response_schema_name: str = Field(pattern=r"^[a-z0-9_]+$")
     response_schema: dict[str, object]
     max_output_tokens: int = Field(gt=0)
+    # Native dispatch is explicit and compatibility-gated; empty uses JSON fallback.
+    tools: list[dict[str, object]] = Field(default_factory=list, max_length=3)
     # Thinking is disabled on every call; the type admits no other value.
     enable_thinking: Literal[False] = False
 
@@ -245,6 +249,7 @@ class ModelResponse(Contract):
     prompt_tokens: int = Field(ge=0)
     output_tokens: int = Field(ge=0)
     finish_reason: str
+    tool_calls: list[dict[str, object]] = Field(default_factory=list, max_length=1)
 
 
 class ModelClient(Protocol):

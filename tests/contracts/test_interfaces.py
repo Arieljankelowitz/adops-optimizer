@@ -119,6 +119,8 @@ IMPLEMENTED = {
     load.load_csv, quality.assess_quality, quality.refine_quality,
     metrics.aggregate, detectors.detect_opportunities, scenarios.compute_scenarios,
     render.render_report, runner.run_pipeline,
+    analysis.analyze_candidate, ranking.rank_recommendations,
+    tools.breakdown, tools.daily_trend, tools.compare_to_peers,
 }
 STUBS = [(f, e) for f, e in EXPECTED if f not in IMPLEMENTED]
 

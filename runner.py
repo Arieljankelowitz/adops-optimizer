@@ -312,28 +312,51 @@ class _ProgressToolRouter:
         self.stages = stages
         self.progress = progress
         self.budget = budget
-        self.calls: dict[str, int] = {}
+        self.calls: dict[str | None, int] = {}
+        self.cache: dict[str, ToolEvidence] = {}
 
     @property
     def allowed_tools(self) -> frozenset[ToolName]:
         return frozenset(ToolName)
 
+    def validate_analysis(self, output: CandidateAnalysis) -> ValidationResult:
+        return self.stages.validate_analysis(output, self.ctx.bundle)
+
+    def dispatch_explore(self, call: ToolCall) -> ToolEvidence:
+        # No candidate exists yet. Scope is checked by the deterministic tool,
+        # and exploration owns a separate fixed execution budget.
+        return self._dispatch(None, call)
+
     def dispatch(self, candidate_id: str, call: ToolCall) -> ToolEvidence:
+        return self._dispatch(candidate_id, call)
+
+    def _dispatch(self, candidate_id: str | None, call: ToolCall) -> ToolEvidence:
+        from llm.tools import extend_bundle
+
+        key = call.model_dump_json()
+        if key in self.cache:
+            return self.cache[key]
         count = self.calls.get(candidate_id, 0)
-        if count >= self.budget.max_tool_calls_per_candidate:
+        limit = (min(self.budget.max_explore_tool_calls, 3) if candidate_id is None else
+                 min(self.budget.max_tool_calls_per_candidate, 3))
+        if count >= limit:
             raise PipelineError(ProgressStage.TOOL_CALL, "Tool call budget exceeded.")
         self.calls[candidate_id] = count + 1
         with self.progress.stage(ProgressStage.TOOL_CALL, candidate_id):
             match call:
                 case BreakdownArgs():
-                    return self.stages.breakdown(
+                    ev = self.stages.breakdown(
                         self.ctx, call.segment_id, call.by, call.period_id, call.limit)
                 case DailyTrendArgs():
-                    return self.stages.daily_trend(self.ctx, call.segment_id, call.period_id)
+                    ev = self.stages.daily_trend(self.ctx, call.segment_id, call.period_id)
                 case CompareToPeersArgs():
-                    return self.stages.compare_to_peers(
+                    ev = self.stages.compare_to_peers(
                         self.ctx, call.segment_id, call.period_id, call.peer_definition_id)
-        raise PipelineError(ProgressStage.TOOL_CALL, "Unknown tool.")
+                case _:
+                    raise PipelineError(ProgressStage.TOOL_CALL, "Unknown tool.")
+            self.ctx = replace(self.ctx, bundle=extend_bundle(self.ctx.bundle, ev))
+            self.cache[key] = ev
+            return ev
 
 
 def _utcnow() -> datetime:
@@ -361,6 +384,8 @@ class _ModelResult:
     failures: dict[str, tuple[ValidationIssue, ...]] = field(default_factory=dict)
     model_id: str | None = None
     model_revision: str | None = None
+    bundle: EvidenceBundle | None = None
+    model_call_counts: dict[str, int] = field(default_factory=dict)
 
 
 def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
@@ -370,7 +395,7 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
     if config.model_profile_id is None:
         progress.skip(ProgressStage.MODEL_READINESS, "no_model_profile")
         return _ModelResult(RunStatus.DETERMINISTIC_ONLY)
-    if not bundle.packs:
+    if not bundle.packs and not budget.explore_enabled:
         progress.skip(ProgressStage.MODEL_READINESS, "no_candidates")
         return _ModelResult(RunStatus.DETERMINISTIC_ONLY)
 
@@ -405,14 +430,21 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
         stages, progress, budget,
     )
     started = monotonic()
-    packs: list[CandidatePack] = list(bundle.packs.values())[: budget.max_candidates]
-    complete = True
+    packs: list[CandidatePack] = list(bundle.packs.values())[: min(budget.max_candidates, 15)]
+    complete = len(packs) == len(bundle.packs)
+    for skipped in list(bundle.packs.values())[len(packs):]:
+        result.analyses.append(CandidateAnalysis(
+            candidate_id=skipped.candidate.candidate_id, status=AnalysisStatus.BUDGET_EXHAUSTED,
+            recommendation=None, tool_evidence=[], generation_turns=0, repairs=0))
     for pack in packs:
         cid = pack.candidate.candidate_id
         progress.check_cancel(ProgressStage.CANDIDATE_ANALYSIS, cid)
         if monotonic() - started > budget.warm_inference_seconds:
             progress.emit(ProgressStage.CANDIDATE_ANALYSIS, ProgressState.SKIPPED,
                           "wall_clock_budget_exhausted", cid)
+            result.analyses.append(CandidateAnalysis(
+                candidate_id=cid, status=AnalysisStatus.BUDGET_EXHAUSTED,
+                recommendation=None, tool_evidence=[], generation_turns=0, repairs=0))
             complete = False
             continue
         progress.emit(ProgressStage.CANDIDATE_ANALYSIS, ProgressState.STARTED,
@@ -436,6 +468,7 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
                      else ProgressState.FAILED)
             progress.emit(ProgressStage.CANDIDATE_ANALYSIS, state, analysis.status.value, cid)
         result.analyses.append(analysis)
+        bundle = router.ctx.bundle
         if analysis.status is AnalysisStatus.REJECTED_INVALID:
             continue
         if analysis.status is not AnalysisStatus.COMPLETE or analysis.recommendation is None:
@@ -455,6 +488,36 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
             result.failures[cid] = tuple(verdict.errors)
             progress.emit(ProgressStage.VALIDATION, ProgressState.FAILED, "rejected", cid)
 
+    if budget.explore_enabled:
+        from llm.analysis import explore_candidates
+
+        exploration = explore_candidates(bundle, router, client, budget, judged=result.analyses)
+        router.ctx = replace(router.ctx, bundle=exploration.bundle)
+        bundle = exploration.bundle
+        for pack in exploration.packs:
+            cid = pack.candidate.candidate_id
+            progress.check_cancel(ProgressStage.CANDIDATE_ANALYSIS, cid)
+            try:
+                analysis = stages.analyze_candidate(pack, router, client, budget)
+                bundle = router.ctx.bundle
+                result.analyses.append(analysis)
+                if analysis.status is AnalysisStatus.COMPLETE and analysis.recommendation is not None:
+                    verdict = stages.validate_analysis(analysis, bundle)
+                    if verdict.accepted:
+                        result.recommendations.append(verdict.value)
+                    else:
+                        result.failures[cid] = tuple(verdict.errors)
+                # Optional discovery never makes otherwise complete rule results partial.
+            except RunCancelled:
+                raise
+            except Exception:
+                progress.emit(ProgressStage.CANDIDATE_ANALYSIS, ProgressState.FAILED,
+                              "optional_explore_judgment_failed", cid)
+        progress.check_cancel(ProgressStage.CANDIDATE_ANALYSIS)
+
+    result.bundle = bundle
+    # Ranking's sole repair also covers lane C grounding/overlap failures.
+    setattr(client, "_validate_ranking", lambda output: stages.validate_analysis(output, bundle))
     actionable = [r for r in result.recommendations
                   if r.recommendation.decision in (Decision.RECOMMEND_TEST,
                                                    Decision.INVESTIGATE_FIRST)]
@@ -483,6 +546,18 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
                 complete = False
     if not complete:
         result.status = RunStatus.PARTIAL
+    elif not result.recommendations:
+        result.status = RunStatus.DETERMINISTIC_ONLY
+    from llm.analysis import reasoning_stats
+
+    reasoning = reasoning_stats(client)
+    result.model_call_counts = {"generations": reasoning.generations,
+                                "ranking_calls": reasoning.ranking_calls,
+                                "invalid_outputs": reasoning.invalid_outputs}
+    transport = getattr(client, "stats", None)
+    if transport is not None:
+        result.model_call_counts.update({name: getattr(transport, name, 0) for name in (
+            "network_attempts", "transport_retries", "prompt_tokens", "output_tokens")})
     return result
 
 
@@ -545,6 +620,7 @@ def execute(
         with p.stage(ProgressStage.EVIDENCE):
             bundle = stages.build_evidence(metrics, quality, candidates, config.evidence)
         model = _run_model(bundle, metrics, config, stages, p, env, monotonic)
+        bundle = model.bundle or bundle
 
     manifest = RunManifest(
         run_id=run_id,
@@ -559,6 +635,10 @@ def execute(
         files={},
         model_id=model.model_id,
         model_revision=model.model_revision,
+        model_call_counts=model.model_call_counts,
+        incomplete_candidate_ids=[a.candidate_id for a in model.analyses
+                                  if a.status not in (AnalysisStatus.COMPLETE,
+                                                      AnalysisStatus.REJECTED_INVALID)],
     )
     run = ValidatedRun(
         config=config,

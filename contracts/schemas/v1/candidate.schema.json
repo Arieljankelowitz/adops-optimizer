@@ -55,6 +55,15 @@
     "family": {
       "$ref": "#/$defs/DetectorFamily"
     },
+    "origin": {
+      "default": "detector",
+      "enum": [
+        "detector",
+        "model_proposed"
+      ],
+      "title": "Origin",
+      "type": "string"
+    },
     "overlap_group_ids": {
       "items": {
         "pattern": "^O_[0-9a-f]{16}$",

@@ -82,6 +82,10 @@ class ModelBudgetError(ModelClientError):
     """The run's network-attempt or warm-inference budget is spent."""
 
 
+class ModelToolProtocolError(ModelClientError):
+    """Native tools were refused; caller may use its bounded JSON fallback."""
+
+
 class ModelOutputError(ModelClientError):
     """The server answered but the answer is unusable (empty, truncated, invalid).
 
@@ -356,9 +360,9 @@ class SelfHostedModelClient:
             return result
 
     def _request_body(self, request: ModelRequest) -> dict[str, object]:
-        return {
+        body = {
             "model": self.profile.served_model_name,
-            "messages": [m.model_dump() for m in request.messages],
+            "messages": [m.model_dump(exclude_none=True) for m in request.messages],
             "max_tokens": request.max_output_tokens,
             "temperature": self.profile.temperature,
             "stream": False,
@@ -374,6 +378,9 @@ class SelfHostedModelClient:
             # whole output budget before any answer.
             "chat_template_kwargs": {"enable_thinking": self.profile.enable_thinking},
         }
+        if request.tools:
+            body.update(tools=request.tools, tool_choice="auto", parallel_tool_calls=False)
+        return body
 
     def _attempt_deadline(self) -> float:
         if self.stats.network_attempts >= self.budget.max_network_attempts:
@@ -389,6 +396,8 @@ class SelfHostedModelClient:
 
     def _parse(self, response: httpx.Response, request: ModelRequest) -> ModelResponse:
         if response.status_code != 200:
+            if request.tools and response.status_code in (400, 422):
+                raise ModelToolProtocolError("native_tools_refused")
             raise ModelUnavailableError(
                 f"generation failed with HTTP {response.status_code}: {_error_text(response)}")
         try:
@@ -418,6 +427,25 @@ class SelfHostedModelClient:
         if reasoning:
             raise fail("model returned a thinking trace with thinking disabled",
                        ["thinking_trace_present"])
+        native = message.get("tool_calls")
+        if native:
+            if not request.tools or finish_reason != "tool_calls" or len(native) != 1:
+                raise fail("unexpected native tools", ["unexpected_tool_calls"])
+            try:
+                tool = native[0]
+                name = tool["function"]["name"]
+                definitions = {t["function"]["name"]: t["function"]["parameters"]
+                               for t in request.tools}
+                if len(tool["function"]["arguments"]) > 4096:
+                    raise ValueError("oversize tool arguments")
+                args = json.loads(tool["function"]["arguments"])
+                if not isinstance(tool["id"], str) or len(tool["id"]) > 128:
+                    raise ValueError("invalid tool ID")
+                jsonschema.validate(args, definitions[name])
+            except (KeyError, TypeError, ValueError, jsonschema.ValidationError) as exc:
+                raise fail("invalid native tool", ["invalid_native_tool_call"]) from exc
+            return ModelResponse(content="", tool_calls=native, prompt_tokens=prompt_tokens,
+                                 output_tokens=output_tokens, finish_reason=finish_reason)
         if content is None or not content.strip():
             raise fail(f"model returned no content (finish_reason={finish_reason!r})",
                        ["empty_content"])

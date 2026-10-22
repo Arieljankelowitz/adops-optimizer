@@ -591,6 +591,8 @@ class _Renderer:
                 r = rec.recommendation
                 d.text("- ")
                 d.text(_title(r))
+                if r.origin == "model_proposed":
+                    d.text(" (model-proposed)")
                 d.text(" — ")
                 self.segment(r.segment_id)
                 d.text(" ")
@@ -642,6 +644,8 @@ class _Renderer:
         self.ref(r.candidate_id)
         if cand is not None:
             d.text(f" · {T.FAMILY_LABELS[cand.family]}")
+        if r.origin == "model_proposed":
+            d.text(" · model-proposed (not detector-raised)")
         d.text(" · ")
         self.period(r.period_id)
         d.line()
@@ -910,6 +914,8 @@ class _Renderer:
             return
         for cand in excluded:
             d.text(f"- {T.FAMILY_LABELS[cand.family]}, {T.ELIGIBILITY_TEXT[cand.eligibility]}: ")
+            if cand.origin == "model_proposed":
+                d.text("model-proposed (not detector-raised) · ")
             self.segment(cand.segment_id)
             if cand.rejection_reason:
                 d.text(" — ")
@@ -923,6 +929,8 @@ class _Renderer:
             verb = "merged into another recommendation" if r.decision is Decision.MERGE else \
                 "rejected by the model"
             d.text(f"- Candidate {verb}: ")
+            if r.origin == "model_proposed":
+                d.text("model-proposed · ")
             self.segment(r.segment_id)
             d.text(" ")
             self.ref(r.candidate_id)
@@ -930,11 +938,16 @@ class _Renderer:
         for analysis in incomplete:
             d.text(f"- {_sentence(T.ANALYSIS_STATUS_TEXT[analysis.status])}: candidate ")
             self.ref(analysis.candidate_id)
+            candidate = self.b.candidates.get(analysis.candidate_id)
+            if candidate is not None and candidate.origin == "model_proposed":
+                d.text(" (model-proposed)")
             d.line()
         for key, errors in sorted(self.run.validation_failures.items()):
             d.text("- Rejected by validation: ")
             if key in self.b.candidates:
                 self.ref(key)
+                if self.b.candidates[key].origin == "model_proposed":
+                    d.text(" (model-proposed)")
             else:
                 d.text(clean_label(key))
             d.text(" — ")
