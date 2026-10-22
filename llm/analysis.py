@@ -475,8 +475,11 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
         ]
         known, returned, executions, cache = {}, set(), 0, {}
         proposals = []
+        # Set once a tool result cannot fit the prompt: discovery ends with what
+        # the model has actually been shown.
+        force_final = False
         for turn in range(min(budget.max_explore_turns, 4)):
-            final = turn + 1 == min(budget.max_explore_turns, 4)
+            final = turn + 1 == min(budget.max_explore_turns, 4) or force_final
             messages.append(
                 ChatMessage(
                     role="user",
@@ -517,19 +520,25 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                 bundle = extend_bundle(bundle, ev)
                 cache[key] = ev
             ev = cache[key]
+            seen = dict(known)
             for ref in (
                 ev.returned_fact_ids + ev.coverage_fact_ids + ev.other_bucket_fact_ids
             ):
-                known[ref] = bundle.facts[ref]
-            returned.update(ev.returned_fact_ids)
-            messages.append(
-                ChatMessage(
-                    role="user",
-                    content=canonical_json(
-                        tool_view(ev, [known[r] for r in sorted(known)])
-                    ),
-                )
+                seen[ref] = bundle.facts[ref]
+            result_message = ChatMessage(
+                role="user",
+                content=canonical_json(tool_view(ev, [seen[r] for r in sorted(seen)])),
             )
+            # A result the model is not shown can neither be cited nor seed a pack.
+            if (
+                count_prompt(client, messages + [result_message]) + TURN_RESERVE_TOKENS
+                > prompt_limit(client)
+            ):
+                force_final = True
+                continue
+            known = seen
+            returned.update(ev.returned_fact_ids)
+            messages.append(result_message)
         packs = []
         candidates, pack_map = dict(bundle.candidates), dict(bundle.packs)
         for proposal in proposals:

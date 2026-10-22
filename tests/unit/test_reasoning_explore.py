@@ -203,3 +203,22 @@ def test_explore_failure_is_optional_and_does_not_change_rule_results(ctx, bad):
         RunBudget(explore_enabled=True),
     )
     assert result.status == "failed_optional" and result.bundle is ctx.bundle
+
+
+def test_explore_tool_result_that_cannot_fit_is_not_shown_and_ends_discovery(ctx):
+    """Explore is on by default: an oversize drill-down must not overrun the context."""
+    router = ExplorerRouter(ctx)
+    client = FakeClient([tool_turn(ctx), {"kind": "final", "proposals": []}])
+    # Requests carrying the tool result would exceed the 12,288-token limit.
+    client.count_prompt_tokens = lambda messages, tools: (
+        13_000 if any("untrusted_tool_evidence" in m.content for m in messages) else 4_000
+    )
+    result = explore_candidates(
+        ctx.bundle, router, client, RunBudget(explore_enabled=True, max_explore_proposals=2)
+    )
+    assert result.status == "complete" and not result.packs
+    assert len(router.calls) == 1 and len(client.requests) == 2
+    assert not any(
+        "untrusted_tool_evidence" in m.content for r in client.requests for m in r.messages
+    )
+    assert '"final_only":true' in client.requests[1].messages[-1].content

@@ -19,7 +19,7 @@ from contracts.enums import (
     AnalysisStatus,
     BudgetReason,
     Decision,
-    MetricKey,
+    FactKind,
     ProgressStage,
     ProgressState,
 )
@@ -259,16 +259,17 @@ def test_tool_result_that_does_not_fit_is_dropped_and_the_pack_is_judged(pack): 
     """A drill-down that would overflow the prompt must not cost the candidate."""
     from tests.unit.test_reasoning import call_step
 
-    sizes = {"pack": 9000, "with_tool": PROMPT_LIMIT}
-    client = FakeClient([call_step(pack), final(pack)])
+    from tests.unit.test_reasoning import recommendation
+
+    client = FakeClient([call_step(pack), recommendation(pack).model_dump(mode="json")])
     client.count_prompt_tokens = lambda messages, tools: (
-        sizes["with_tool"] if len(messages) > 3 else sizes["pack"])
+        PROMPT_LIMIT if any(m.role == "assistant" for m in messages) else 9000)
     router = FakeRouter(pack)
     result = analyze_candidate(pack, router, client, RunBudget())
     assert result.status is AnalysisStatus.COMPLETE
     assert router.calls and len(client.requests) == 2
     # The second request is final-only and carries no tool exchange.
-    assert len(client.requests[1].messages) == 3
+    assert not any(m.role == "assistant" for m in client.requests[1].messages)
     assert "final_recommendation" in client.requests[1].messages[-1].content
 
 
@@ -353,7 +354,12 @@ class ScriptedModel:
         evidence = json.loads(request.messages[1].content)["untrusted_evidence"]
         pack_ = self.bundle.packs[evidence["candidate"]["candidate_id"]]
         c = pack_.candidate
-        trigger = next(f for f in pack_.facts if f.fact_id in c.trigger_fact_ids)
+        # A plain measured fact of the candidate's own scope; the model's job in
+        # this scripted stand-in is only to cite something the prompt showed.
+        trigger = next(
+            f for f in pack_.facts
+            if f.kind is FactKind.MEASURED
+            and (f.segment.segment_id, f.period.period_id) == (c.segment_id, c.period_id))
         rec = CandidateRecommendation(
             candidate_id=c.candidate_id, decision=Decision.INVESTIGATE_FIRST,
             segment_id=c.segment_id, period_id=c.period_id,
