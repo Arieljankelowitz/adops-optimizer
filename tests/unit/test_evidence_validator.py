@@ -181,9 +181,15 @@ def test_packs_are_closed_bounded_and_retain_all_warnings_and_counter_evidence(b
         assert set(pack.candidate.counter_evidence_fact_ids) <= ids
         assert set(pack.candidate.trigger_fact_ids) <= ids
         assert all(set(f.provenance.parent_fact_ids) <= ids for f in pack.facts)
-        assert set(pack.candidate.quality_issue_ids) == {
-            i.issue_id for i in pack.quality_issues
-        }
+        # Issues bearing on the claim are listed with their facts; every other
+        # touching issue is counted in the guide's summary, none is dropped.
+        listed = {i.issue_id for i in pack.quality_issues}
+        assert listed <= set(pack.candidate.quality_issue_ids)
+        summarised = sum(s.issue_count for s in pack.answer_guide.other_quality_issues)
+        assert len(listed) + summarised == len(pack.candidate.quality_issue_ids)
+        for issue in pack.quality_issues:
+            refs = {*issue.measured_fact_ids, *issue.threshold_fact_ids}
+            assert refs <= ids
         assert len(serialize_pack(pack).encode()) <= EvidenceConfig().max_pack_bytes
         payload = json.loads(serialize_pack(pack))
         assert "untrusted_segment_labels" in payload

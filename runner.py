@@ -586,6 +586,14 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
     result.model_call_counts = {"generations": reasoning.generations,
                                 "ranking_calls": reasoning.ranking_calls,
                                 "invalid_outputs": reasoning.invalid_outputs}
+    if budget.explore_enabled:
+        # Whether optional discovery ran to the end, and how many candidates it raised.
+        result.model_call_counts.update(
+            explore_completed=int(reasoning.explore_status == "complete"),
+            explore_proposals=sum(1 for a in result.analyses
+                                  if a.candidate_id in bundle.candidates
+                                  and bundle.candidates[a.candidate_id].origin
+                                  == "model_proposed"))
     transport = getattr(client, "stats", None)
     if transport is not None:
         result.model_call_counts.update({name: getattr(transport, name, 0) for name in (

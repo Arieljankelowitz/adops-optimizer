@@ -47,14 +47,13 @@ from contracts.runtime import EvidenceBundle
 from contracts.templates import OBSERVATION_TEMPLATES
 from contracts.templates import ObservationTemplateId as Template
 from pipeline.detectors import DIMENSION_BLOCKERS, FAMILY_BLOCKERS
-from pipeline.evidence import SCENARIOS
+from pipeline.evidence import SCENARIOS, scoped_issues
 from pipeline.metrics import (
     _RATIOS,
     _SHARES,
     ADDITIVE,
     FUNNEL_METRICS,
     MONEY_RATE_METRICS,
-    segments_overlap,
 )
 from pipeline.scenarios import evaluate_scenarios
 
@@ -320,28 +319,19 @@ class _Validator:
             self.error(Code.WRONG_PERIOD, path, fact.fact_id)
 
     def restrictions(self, candidate):
-        out = set()
-        segment = self.b.segments.get(candidate.segment_id)
-        period = self.b.periods.get(candidate.period_id)
-        for issue in self.b.quality.issues:
-            # Unknown quality scopes conservatively apply, just as in B.
-            touches = not issue.segment_ids or any(
-                sid not in self.b.segments
-                or segment is None
-                or segments_overlap(segment.filters, self.b.segments[sid].filters)
-                for sid in issue.segment_ids
+        # Unknown quality scopes conservatively apply, just as in B. The answer
+        # guide in each pack is derived from the very same issue set.
+        return {
+            r
+            for issue in scoped_issues(
+                self.b.quality.issues,
+                self.b.segments,
+                self.b.periods,
+                candidate.segment_id,
+                candidate.period_id,
             )
-            dates = not issue.period_ids or any(
-                pid not in self.b.periods
-                or period is None
-                or bool(
-                    set(period.included_dates) & set(self.b.periods[pid].included_dates)
-                )
-                for pid in issue.period_ids
-            )
-            if touches and dates:
-                out.update(issue.inference_restrictions)
-        return out
+            for r in issue.inference_restrictions
+        }
 
     def observation(self, statement, candidate, allowed, restrictions, path):
         roles = OBSERVATION_TEMPLATES[statement.template_id].fact_roles
@@ -479,7 +469,18 @@ class _Validator:
             self.error(
                 Code.SCENARIO_MISMATCH, path, detail="scenario limitations omitted"
             )
-        if not set(scenario.overlap_group_ids) <= set(rec.overlap_group_ids):
+        # A scenario is shared by every candidate on its scope, so it carries
+        # their groups too. A recommendation may only declare groups that
+        # contain its own candidate (checked in ``analysis``); requiring the
+        # others as well made such a scenario impossible to cite. Unknown
+        # groups still count, and fail as unknown references.
+        own_groups = {
+            g
+            for g in scenario.overlap_group_ids
+            if (group := self.b.overlap_groups.get(g)) is None
+            or candidate.candidate_id in group.candidate_ids
+        }
+        if not own_groups <= set(rec.overlap_group_ids):
             self.error(Code.OVERLAP_CONFLICT, path)
         for ref in (*scenario.historical_fact_ids, *scenario.result_fact_ids):
             self.fact(ref, path)
@@ -523,7 +524,7 @@ class _Validator:
             return None
         if (
             not 1 <= output.generation_turns <= 4
-            or output.repairs > 1
+            or output.repairs > 2
             or len(output.tool_evidence) > 3
         ):
             self.error(

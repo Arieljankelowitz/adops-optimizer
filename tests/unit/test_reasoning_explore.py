@@ -153,7 +153,7 @@ def test_explore_cannot_use_existing_but_unreturned_fact(ctx):
     router = ExplorerRouter(ctx)
 
     def invented(request):
-        answer = proposals(router, 1)
+        answer = proposals(router, 2)
         answer["proposals"][0]["fact_ids"] = ["F_" + "f" * 16]
         return answer
 
@@ -163,7 +163,11 @@ def test_explore_cannot_use_existing_but_unreturned_fact(ctx):
         FakeClient([tool_turn(ctx), invented]),
         RunBudget(explore_enabled=True),
     )
-    assert result.status == "failed_optional" and not result.packs
+    # The unsupported proposal is dropped on its own; the supported one still
+    # becomes an ordinary candidate for judgment and strict validation.
+    assert result.status == "complete" and len(result.packs) == 1
+    (pack,) = result.packs
+    assert "F_" + "f" * 16 not in pack.candidate.trigger_fact_ids
 
 
 def test_explore_tools_have_separate_fixed_budget_and_cache(ctx):

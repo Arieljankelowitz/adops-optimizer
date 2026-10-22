@@ -7,7 +7,8 @@ transport boundary. A pack that cannot retain its warnings/counter-evidence
 within budget is refused rather than silently weakening the evidence.
 """
 
-from collections.abc import Callable, Iterable
+from collections import Counter
+from collections.abc import Callable, Iterable, Mapping
 from decimal import Decimal
 from types import MappingProxyType
 
@@ -15,23 +16,35 @@ from contracts.config import EvidenceConfig
 from contracts.enums import (
     AssumptionSelector,
     BudgetReason,
+    Decision,
     DetectorFamily,
     EligibilityStatus,
     FactKind,
+    InferenceRestriction,
     MetricKey,
     ScenarioTemplate,
     ToolName,
     Unit,
+    ValidityStatus,
 )
 from contracts.ids import IdPrefix, canonical_json, make_id
 from contracts.models import (
+    AnswerGuide,
     Assumption,
     AssumptionBounds,
     Candidate,
     CandidatePack,
     Fact,
+    ObservationStatement,
+    Period,
+    QualityIssue,
+    QualityIssueSummary,
     QualityReport,
+    Scenario,
+    ScenarioLabels,
     ScenarioRequest,
+    Segment,
+    TestRequirements,
 )
 from contracts.runtime import (
     AssumptionRegistry,
@@ -40,9 +53,18 @@ from contracts.runtime import (
     MetricsStore,
     ScenarioRegistry,
 )
+from contracts.templates import ObservationTemplateId as Template
 from contracts.templates import TestTemplateId as Test
-from pipeline.detectors import candidate_evidence
-from pipeline.metrics import ADDITIVE, FactBuilder, IssueIndex, stats_row
+from pipeline.detectors import DIMENSION_BLOCKERS, FAMILY_BLOCKERS, candidate_evidence
+from pipeline.metrics import (
+    ADDITIVE,
+    FUNNEL_METRICS,
+    MONEY_RATE_METRICS,
+    FactBuilder,
+    IssueIndex,
+    segments_overlap,
+    stats_row,
+)
 from pipeline.scenarios import PARAMETERS, REQUIRED_METRICS, evaluate_scenarios
 
 TESTS = {
@@ -62,8 +84,384 @@ SCENARIOS = {
 }
 
 
+CONCENTRATION_METRICS = frozenset(
+    {
+        MetricKey.MAX_DAY_REVENUE_SHARE,
+        MetricKey.TOP_TWO_DAY_REVENUE_SHARE,
+        MetricKey.MAX_DAY_PROFIT_SHARE,
+        MetricKey.TOP_TWO_DAY_PROFIT_SHARE,
+    }
+)
+# Planning parameters a ``recommend_test`` must label (checked by the validator).
+TEST_PARAMETERS = ("test_allocation", "test_min_days", "test_profit_stop_loss")
+# Guardrails a ``recommend_test`` must name as success metrics.
+TEST_SUCCESS_METRICS = (MetricKey.PROFIT, MetricKey.PROFIT_PER_MILLION_REQUESTS)
+# Restrictions the validator applies to the statements of any candidate.
+OBSERVATION_RESTRICTIONS = frozenset(
+    {
+        InferenceRestriction.NO_FUNNEL_INFERENCE,
+        InferenceRestriction.NO_YIELD_ESTIMATE,
+        InferenceRestriction.NO_TREND_CLAIM,
+        InferenceRestriction.NO_MATCHED_PEER_LABEL,
+    }
+)
+FLOOR_FAMILIES = frozenset({DetectorFamily.FLOOR_HIGH_BID, DetectorFamily.FLOOR_LOW_BID})
+# Statements offered to the model per candidate; the contract caps the list.
+OBSERVATION_OPTION_LIMIT = 24
+# Issues of one rule listed with their facts per candidate; repeats of the same
+# rule on other overlapping slices add no new restriction, only tokens.
+DETAILED_ISSUES_PER_RULE = 2
+
+
 class EvidenceBudgetError(ValueError):
     """Mandatory evidence cannot fit; no unsafe partial pack was emitted."""
+
+
+def claim_restrictions(
+    candidate: Candidate, segment: Segment
+) -> frozenset[InferenceRestriction]:
+    """Restrictions that can change what may be claimed or decided for ``candidate``.
+
+    The decision blockers of its family and of the dimensions it fixes, the
+    statement-level restrictions every observation is checked against, and
+    the export caveats. A quality issue carrying none of these is context
+    rather than a constraint for this candidate: its pack summarises it in one
+    line instead of listing it with its facts.
+    """
+    out = set(FAMILY_BLOCKERS[candidate.family]) | OBSERVATION_RESTRICTIONS
+    out.add(InferenceRestriction.EXPORTED_RATE_UNTRUSTED)
+    if candidate.family in FLOOR_FAMILIES:
+        out.add(InferenceRestriction.NO_FLOOR_CAUSAL_CLAIM)
+    out.update(r for r, d in DIMENSION_BLOCKERS.items() if d in segment.filters)
+    return frozenset(out)
+
+
+def scoped_issues(
+    issues: Iterable[QualityIssue],
+    segments: Mapping[str, Segment],
+    periods: Mapping[str, Period],
+    segment_id: str,
+    period_id: str,
+) -> list[QualityIssue]:
+    """Issues on traffic and dates that overlap the scope; unknown scopes apply.
+
+    The validator derives a candidate's restrictions from exactly this set.
+    """
+    segment, period = segments.get(segment_id), periods.get(period_id)
+    out = []
+    for issue in issues:
+        touches = not issue.segment_ids or any(
+            sid not in segments
+            or segment is None
+            or segments_overlap(segment.filters, segments[sid].filters)
+            for sid in issue.segment_ids
+        )
+        dates = not issue.period_ids or any(
+            pid not in periods
+            or period is None
+            or bool(set(period.included_dates) & set(periods[pid].included_dates))
+            for pid in issue.period_ids
+        )
+        if touches and dates:
+            out.append(issue)
+    return out
+
+
+def split_issues(
+    candidate: Candidate,
+    segment: Segment,
+    issues: Iterable[QualityIssue],
+    segments: Mapping[str, Segment],
+) -> tuple[list[QualityIssue], list[QualityIssue]]:
+    """(listed in full, summarised) for one candidate's pack.
+
+    Issues whose restrictions bear on this candidate's claims go in with their
+    facts, at most ``DETAILED_ISSUES_PER_RULE`` per rule; the rest become one
+    summary line. Every restriction still reaches the model through the
+    answer guide, and the validator still applies all of them.
+    """
+    relevant = claim_restrictions(candidate, segment)
+    per_rule: Counter = Counter()
+    detailed, summarised = [], []
+    # The candidate's own slice first, then the narrowest issue scopes.
+    for issue in sorted(
+        issues,
+        key=lambda i: (
+            candidate.segment_id not in i.segment_ids,
+            len(i.segment_ids) or len(segments),
+            i.issue_id,
+        ),
+    ):
+        if (
+            relevant & set(issue.inference_restrictions)
+            and per_rule[issue.rule_id] < DETAILED_ISSUES_PER_RULE
+        ):
+            per_rule[issue.rule_id] += 1
+            detailed.append(issue_view(issue, segment, segments))
+        else:
+            summarised.append(issue)
+    detailed.sort(key=lambda i: i.issue_id)
+    return detailed, summarised
+
+
+def issue_fact_ids(issues: Iterable[QualityIssue]) -> list[str]:
+    """Every fact an issue row references; a pack listing the issue must carry them."""
+    refs: list[str] = []
+    for issue in issues:
+        refs.extend((*issue.measured_fact_ids, *issue.threshold_fact_ids))
+        refs.extend(
+            r
+            for r in (issue.request_exposure_fact_id, issue.revenue_exposure_fact_id)
+            if r
+        )
+    return refs
+
+
+def issue_view(
+    issue: QualityIssue, segment: Segment, segments: Mapping[str, Segment]
+) -> QualityIssue:
+    """One candidate's view of an issue: only the affected scopes it overlaps.
+
+    The full issue (every affected segment and candidate) stays in the bundle;
+    the validator and the report read that, never the pack.
+    """
+    # Unknown scopes touch conservatively, as in ``IssueIndex``, so they stay.
+    touching = [
+        sid
+        for sid in issue.segment_ids
+        if sid not in segments
+        or segments_overlap(segments[sid].filters, segment.filters)
+    ]
+    return issue.model_copy(
+        update={
+            # An empty list means "every segment"; never narrow to that.
+            "segment_ids": touching or issue.segment_ids,
+            "affected_candidate_ids": [],
+        },
+        deep=True,
+    )
+
+
+def observation_options(
+    candidate: Candidate,
+    period: Period,
+    facts: Mapping[str, Fact],
+    restrictions: Iterable[InferenceRestriction],
+    excluded: Iterable[str] = (),
+    limit: int = OBSERVATION_OPTION_LIMIT,
+) -> list[ObservationStatement]:
+    """Observation statements the strict validator accepts for ``candidate``.
+
+    Mirrors ``llm.validator`` role by role (scope, usable evidence, metric and
+    trend restrictions, comparison roles), so the model selects evidence
+    instead of assembling ordered fact roles. Trigger and peer evidence come
+    first. Quality and scenario facts are never offered as observations.
+    """
+    restrictions = set(restrictions)
+    excluded = set(excluded)
+
+    def usable(f: Fact | None) -> bool:
+        return (
+            f is not None
+            and f.kind not in (FactKind.SCENARIO, FactKind.QUALITY)
+            and f.fact_id not in excluded
+            and f.value is not None
+            and f.validity.status is ValidityStatus.VALID
+            and not (
+                InferenceRestriction.NO_FUNNEL_INFERENCE in restrictions
+                and f.metric in FUNNEL_METRICS
+            )
+            and not (
+                InferenceRestriction.NO_YIELD_ESTIMATE in restrictions
+                and f.metric in MONEY_RATE_METRICS
+            )
+        )
+
+    def own(f: Fact) -> bool:
+        return (f.segment.segment_id, f.period.period_id) == (
+            candidate.segment_id,
+            candidate.period_id,
+        )
+
+    rank = {
+        ref: n
+        for n, ref in enumerate(
+            (*candidate.trigger_fact_ids, *candidate.peer_fact_ids)
+        )
+    }
+    ordered = sorted(
+        (f for f in facts.values() if usable(f)),
+        key=lambda f: (rank.get(f.fact_id, len(rank)), f.fact_id),
+    )
+    out: list[ObservationStatement] = []
+
+    def add(template: Template, *refs: str) -> None:
+        statement = ObservationStatement(template_id=template, fact_ids=list(refs))
+        if statement not in out:
+            out.append(statement)
+
+    for f in ordered:
+        c = f.comparison
+        if f.kind is not FactKind.COMPARISON or c is None:
+            continue
+        target, baseline = facts.get(c.left_fact_id), facts.get(c.right_fact_id)
+        if (
+            usable(target)
+            and usable(baseline)
+            and own(target)
+            and f.segment == target.segment
+            and f.period == target.period == baseline.period
+            and f.provenance.parent_fact_ids == [target.fact_id, baseline.fact_id]
+            and (
+                baseline.segment.cohort_id == target.segment.cohort_id
+                or baseline.segment.cohort_id == "excluding_" + candidate.segment_id
+            )
+            and not (
+                InferenceRestriction.NO_MATCHED_PEER_LABEL in restrictions
+                and c.matching_keys
+            )
+        ):
+            add(Template.METRIC_VS_BASELINE, target.fact_id, baseline.fact_id, f.fact_id)
+    for f in ordered:
+        if f.fact_id in rank and own(f) and f.kind is not FactKind.COMPARISON:
+            add(Template.METRIC_VALUE, f.fact_id)
+    for f in ordered:
+        if own(f) and f.metric in CONCENTRATION_METRICS:
+            add(Template.CONCENTRATION, f.fact_id)
+        if own(f) and f.metric is MetricKey.OBSERVED_DAYS:
+            for reference in ordered:
+                if (
+                    reference.metric is MetricKey.OBSERVED_DAYS
+                    and reference.period.period_id == candidate.period_id
+                    and not reference.segment.filters
+                    and reference.segment.cohort_id == f.segment.cohort_id
+                ):
+                    add(Template.COVERAGE, f.fact_id, reference.fact_id)
+    if InferenceRestriction.NO_TREND_CLAIM not in restrictions:
+        dates = set(period.included_dates)
+        for change in ordered:
+            parents = change.provenance.parent_fact_ids
+            if change.metric is not MetricKey.DAILY_CHANGE or len(parents) != 2:
+                continue
+            earlier, later = facts.get(parents[0]), facts.get(parents[1])
+            scoped = [
+                x
+                for x in (earlier, later, change)
+                if usable(x)
+                and x.segment.segment_id == candidate.segment_id
+                and set(x.period.included_dates) <= dates
+            ]
+            if (
+                len(scoped) == 3
+                and earlier.metric is later.metric
+                and earlier.unit is later.unit
+                and earlier.period.end < later.period.start
+                and earlier.value > 0
+                and set(change.period.included_dates)
+                == set(earlier.period.included_dates + later.period.included_dates)
+                and change.value == (later.value - earlier.value) / earlier.value
+            ):
+                add(Template.TREND, earlier.fact_id, later.fact_id, change.fact_id)
+    for f in sorted(
+        (f for f in ordered if own(f) and f.kind is not FactKind.COMPARISON),
+        key=lambda f: (list(MetricKey).index(f.metric), f.fact_id),
+    ):
+        add(Template.METRIC_VALUE, f.fact_id)
+    return out[:limit]
+
+
+def answer_guide(
+    candidate: Candidate,
+    segment: Segment,
+    period: Period,
+    issues: list[QualityIssue],
+    summarised: list[QualityIssue],
+    facts: Mapping[str, Fact],
+    assumptions: list[Assumption],
+    scenarios: list[Scenario],
+    permitted_tests: list[Test],
+) -> AnswerGuide:
+    """The answer form the validator will accept for ``candidate``, computed by code.
+
+    ``issues`` are all quality issues touching the candidate (the validator's
+    restriction scope); ``summarised`` the subset its pack only summarises.
+    Merge is never offered: an exact-scope duplicate is already rejected by
+    the detectors.
+    """
+    restrictions = sorted({r for i in issues for r in i.inference_restrictions})
+    options = observation_options(
+        candidate,
+        period,
+        facts,
+        restrictions,
+        {r for i in issues for r in i.threshold_fact_ids},
+    )
+    blocked = (
+        InferenceRestriction.NO_RECOMMENDATIONS in restrictions
+        or candidate.eligibility is EligibilityStatus.REJECTED
+        or not options
+    )
+    test_blocked = (
+        candidate.eligibility is EligibilityStatus.EXPLORATORY
+        or bool(set(restrictions) & FAMILY_BLOCKERS[candidate.family])
+        or any(
+            r in restrictions and d in segment.filters
+            for r, d in DIMENSION_BLOCKERS.items()
+        )
+    )
+    test_assumptions = {
+        a.parameter_key: a.assumption_id
+        for a in assumptions
+        if a.parameter_key in TEST_PARAMETERS
+    }
+    test = (
+        TestRequirements(
+            test_template_ids=permitted_tests,
+            assumption_ids=[test_assumptions[k] for k in TEST_PARAMETERS],
+            success_metric_keys=list(TEST_SUCCESS_METRICS),
+        )
+        if not (blocked or test_blocked)
+        and permitted_tests
+        and set(test_assumptions) == set(TEST_PARAMETERS)
+        else None
+    )
+    decisions = (
+        [Decision.REJECT]
+        if blocked
+        else [
+            *([Decision.RECOMMEND_TEST] if test else []),
+            Decision.INVESTIGATE_FIRST,
+            Decision.REJECT,
+        ]
+    )
+    groups = Counter(
+        (i.rule_id, i.severity, tuple(sorted(i.inference_restrictions)))
+        for i in summarised
+    )
+    return AnswerGuide(
+        effective_restrictions=restrictions,
+        allowed_decisions=decisions,
+        observation_options=options,
+        recommend_test=test,
+        scenario_labels=[
+            ScenarioLabels(
+                scenario_id=s.scenario_id,
+                assumption_ids=s.assumption_ids,
+                prerequisite_codes=s.prerequisite_codes,
+                risk_codes=s.limitation_codes,
+            )
+            for s in scenarios
+        ],
+        other_quality_issues=[
+            QualityIssueSummary(
+                rule_id=rule,
+                severity=severity,
+                issue_count=n,
+                inference_restrictions=list(restriction_set),
+            )
+            for (rule, severity, restriction_set), n in sorted(groups.items())
+        ],
+    )
 
 
 # Fact rows carry ``None`` for the overwhelmingly common validity.
@@ -392,9 +790,12 @@ def build_evidence_bounded(
     unpacked: dict[str, BudgetReason] = {}
     counter = count_tokens
     for candidate in chosen:
-        issues = [
-            i for i in quality.issues if i.issue_id in candidate.quality_issue_ids
-        ]
+        # The validator's own issue scope, so the guide states its restrictions.
+        issues = scoped_issues(
+            quality.issues, segments, periods, candidate.segment_id, candidate.period_id
+        )
+        segment = segments[candidate.segment_id]
+        detailed, summarised = split_issues(candidate, segment, issues, segments)
         scenario_list = [
             s
             for s in scenarios
@@ -414,10 +815,7 @@ def build_evidence_bounded(
         context_metrics = {
             MetricKey.OBSERVED_DAYS,
             MetricKey.REVENUE_POSITIVE_DAYS,
-            MetricKey.MAX_DAY_REVENUE_SHARE,
-            MetricKey.TOP_TWO_DAY_REVENUE_SHARE,
-            MetricKey.MAX_DAY_PROFIT_SHARE,
-            MetricKey.TOP_TWO_DAY_PROFIT_SHARE,
+            *CONCENTRATION_METRICS,
         }
         mandatory.extend(
             f.fact_id
@@ -436,16 +834,7 @@ def build_evidence_bounded(
                 )
             )
         )
-        for issue in issues:
-            mandatory.extend((*issue.measured_fact_ids, *issue.threshold_fact_ids))
-            mandatory.extend(
-                r
-                for r in (
-                    issue.request_exposure_fact_id,
-                    issue.revenue_exposure_fact_id,
-                )
-                if r
-            )
+        mandatory.extend(issue_fact_ids(detailed))
         for scenario in scenario_list:
             mandatory.extend((*scenario.historical_fact_ids, *scenario.result_fact_ids))
         required = _closure(mandatory, facts)
@@ -453,16 +842,20 @@ def build_evidence_bounded(
         def pack_for(
             ids: set[str],
             candidate=candidate,
+            segment=segment,
             issues=issues,
+            detailed=detailed,
+            summarised=summarised,
             assumption_list=assumption_list,
             scenario_list=scenario_list,
         ) -> CandidatePack:
             subset = [facts[r] for r in sorted(ids)]
             sids = {f.segment.segment_id for f in subset} | {candidate.segment_id}
             pids = {f.period.period_id for f in subset} | {candidate.period_id}
-            for issue in issues:
+            for issue in detailed:
                 sids.update(issue.segment_ids)
                 pids.update(issue.period_ids)
+            permitted = [TESTS[candidate.family], Test.INSTRUMENTATION_FEASIBILITY]
             # The full candidate remains in bundle.candidates. The prompt must
             # not advertise refs it did not receive; omissions are retrievable
             # through the allowlisted tools and never alter contrary evidence.
@@ -476,18 +869,26 @@ def build_evidence_bounded(
             return CandidatePack(
                 run_namespace=ns,
                 candidate=view,
-                quality_issues=issues,
+                quality_issues=detailed,
                 segments=[segments[r] for r in sorted(sids)],
                 periods=[periods[r] for r in sorted(pids)],
                 facts=subset,
                 assumptions=assumption_list,
                 scenarios=scenario_list,
-                permitted_test_templates=[
-                    TESTS[candidate.family],
-                    Test.INSTRUMENTATION_FEASIBILITY,
-                ],
+                permitted_test_templates=permitted,
                 tool_allowlist=list(ToolName),
                 token_budget=config.max_pack_tokens,
+                answer_guide=answer_guide(
+                    candidate,
+                    segment,
+                    periods[candidate.period_id],
+                    issues,
+                    summarised,
+                    {f.fact_id: f for f in subset},
+                    assumption_list,
+                    scenario_list,
+                    permitted,
+                ),
             )
 
         def fits(pack: CandidatePack) -> bool:

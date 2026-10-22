@@ -31,12 +31,15 @@ profiles:
     gpu: L40S
     tensor_parallel_size: 1
     text_only: true
-    max_model_len: 16384
+    # 32K window for one sequence: 16 of 64 layers use full attention (4 KV
+    # heads x 256 dims), about 64 KiB of KV cache per token, so a full window
+    # needs about 2 GiB. 0.88 of the L40S leaves about 10 GB after the FP8 weights.
+    max_model_len: 32768
     max_num_seqs: 1
     gpu_memory_utilization: 0.88
     enforce_eager: true
-    max_prompt_tokens: 12288
-    max_output_tokens: 2048
+    max_prompt_tokens: 28672
+    max_output_tokens: 4096
     temperature: 0.2
     # Sent as chat_template_kwargs.enable_thinking on every request. With
     # thinking on, reasoning can use the whole output budget and leave no answer.
@@ -60,12 +63,12 @@ profiles:
     gpu: L40S
     tensor_parallel_size: 1
     text_only: true
-    max_model_len: 16384
+    max_model_len: 32768
     max_num_seqs: 1
     gpu_memory_utilization: 0.88
     enforce_eager: true
-    max_prompt_tokens: 12288
-    max_output_tokens: 2048
+    max_prompt_tokens: 28672
+    max_output_tokens: 4096
     temperature: 0.2
     enable_thinking: false
     reasoning_parser: qwen3

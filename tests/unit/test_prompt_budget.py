@@ -29,6 +29,7 @@ from contracts.runtime import ChatMessage, ModelResponse
 from contracts.templates import ObservationTemplateId
 from llm.analysis import analyze_candidate, reasoning_stats
 from llm.client import ModelBudgetError, ModelConfigError
+from llm.profiles import load_profile
 from llm.prompts import build_candidate_messages
 from llm.tokens import (
     PROMPT_OVERHEAD_TOKENS,
@@ -57,7 +58,9 @@ from tests.unit.test_reasoning import FakeClient, FakeRouter, final, pack  # noq
 
 SAMPLE = Path(__file__).resolve().parents[1] / "fixtures" / "synthetic" / "ad_performance.csv"
 PROFILE_ID = "qwen38_fp8_l40s_v1"
+# The orchestrator's limit for a client without a profile (the old 16K window's).
 PROMPT_LIMIT = 12288
+PROFILE_PROMPT_LIMIT = load_profile(PROFILE_ID).max_prompt_tokens
 
 # Exact counts from the pinned Qwen tokenizer for strings in the shape of a
 # serialized pack (measured offline once; the tokenizer is not a dependency).
@@ -308,10 +311,63 @@ def test_gate_leaves_room_for_instructions_and_stays_inside_the_pack_budget(synt
     for pack_ in bundle.packs.values():
         assert estimate_pack_prompt_tokens(serialize_pack(pack_)) <= pack_.token_budget
         assert PROMPT_OVERHEAD_TOKENS < pack_.token_budget
+        # The profile's prompt keeps room beyond a full pack for tool results
+        # and two refused answers with their repair turns.
+        assert PROFILE_PROMPT_LIMIT - pack_.token_budget >= 12288
 
 
-def test_oversize_candidates_are_unpacked_with_a_reason_not_fatal(synthetic_run):
-    bundle = synthetic_run[0]["bundle"]
+def test_overhead_covers_the_candidate_instructions_around_a_pack(synthetic_run):
+    pack_ = next(iter(synthetic_run[0]["bundle"].packs.values()))
+    messages = build_candidate_messages(pack_)
+    turn = ChatMessage(role="user", content=canonical_json({
+        "response": "final_recommendation", "remaining_tool_executions": 3,
+        "peer_definition_ids": ["D_" + "0" * 16] * 5}))
+    around = estimate_prompt_tokens([*messages, turn]) - estimate_text_tokens(
+        serialize_pack(pack_))
+    assert around <= PROMPT_OVERHEAD_TOKENS
+
+
+def test_every_synthetic_candidate_fits_even_the_old_16k_budget(synthetic_run):
+    """Regression: six of fifteen live candidates were skipped as evidence_too_large.
+
+    Only issues bearing on a candidate's claims are listed with their facts, so
+    mandatory evidence fits the 12,288-token prompt of the former 16K window.
+    """
+    captured = {}
+    stages = default_stages()
+
+    def grab(metrics, quality, candidates, config):
+        captured["inputs"] = (metrics, quality, candidates)
+        return stages.build_evidence(metrics, quality, candidates, config)
+
+    with SAMPLE.open("rb") as source:
+        execute(source, RunConfig(), lambda e: None,
+                stages=replace(stages, build_evidence=grab), env={})
+    assert len(synthetic_run[0]["bundle"].packs) == 15
+    assert not synthetic_run[0]["bundle"].unpacked
+    metrics, quality, candidates = captured["inputs"]
+    old = build_evidence_bounded(
+        metrics, quality, candidates, EvidenceConfig(max_pack_tokens=12288),
+        count_tokens=estimate_pack_prompt_tokens, skip_oversize=True)
+    assert len(old.packs) == 15 and not old.unpacked
+
+
+def test_oversize_candidates_are_unpacked_with_a_reason_not_fatal():
+    captured = {}
+    stages = default_stages()
+
+    def grab(metrics, quality, candidates, config):
+        captured["inputs"] = (metrics, quality, candidates)
+        return stages.build_evidence(metrics, quality, candidates, config)
+
+    with SAMPLE.open("rb") as source:
+        execute(source, RunConfig(), lambda e: None,
+                stages=replace(stages, build_evidence=grab), env={})
+    metrics, quality, candidates = captured["inputs"]
+    # Tight enough that only the largest mandatory evidence fails to fit.
+    bundle = build_evidence_bounded(
+        metrics, quality, candidates, EvidenceConfig(max_pack_tokens=9216),
+        count_tokens=estimate_pack_prompt_tokens, skip_oversize=True)
     assert bundle.packs and bundle.unpacked
     assert set(bundle.unpacked.values()) == {BudgetReason.EVIDENCE_TOO_LARGE}
     assert not set(bundle.unpacked) & set(bundle.packs)
@@ -332,7 +388,8 @@ class ScriptedModel:
     """Answers each candidate from its own pack, as a well-behaved model would."""
 
     profile = SimpleNamespace(
-        max_prompt_tokens=PROMPT_LIMIT, max_output_tokens=2048, served_model_name="adops-analysis",
+        max_prompt_tokens=PROFILE_PROMPT_LIMIT, max_output_tokens=2048,
+        served_model_name="adops-analysis",
         enable_thinking=False, temperature=0.2)
 
     def __init__(self, bundle):
@@ -399,8 +456,8 @@ def test_synthetic_file_reaches_the_model_and_yields_validated_recommendations()
     # Every packed candidate reached the client with a prompt inside the limit...
     assert len(model.requests) >= len(bundle.packs) >= 5
     for request in model.requests:
-        assert estimate_prompt_tokens(request.messages, request.tools) <= PROMPT_LIMIT
-    # ...and the pre-fix byte count of those very prompts was over the limit.
+        assert estimate_prompt_tokens(request.messages, request.tools) <= PROFILE_PROMPT_LIMIT
+    # ...and the pre-fix byte count of those very prompts was over the old limit.
     for pack_ in bundle.packs.values():
         old_count = sum(len(canonical_json(m.model_dump(exclude_none=True)).encode()) + 32
                         for m in build_candidate_messages(pack_))
@@ -419,7 +476,7 @@ def test_synthetic_file_reaches_the_model_and_yields_validated_recommendations()
     skipped = [e for e in events if e.state is ProgressState.SKIPPED
                and e.stage is ProgressStage.CANDIDATE_ANALYSIS]
     assert {e.candidate_id for e in skipped} == set(bundle.unpacked)
-    assert {e.message_code for e in skipped} == {"evidence_too_large"}
+    assert {e.message_code for e in skipped} <= {"evidence_too_large"}
     assert run.manifest.incomplete_candidate_ids == sorted(bundle.unpacked) or set(
         run.manifest.incomplete_candidate_ids) == set(bundle.unpacked)
 

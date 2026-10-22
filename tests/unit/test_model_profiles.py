@@ -48,7 +48,7 @@ def test_primary_profile_carries_the_proven_pins() -> None:
     assert primary.transformers_version == "5.19.0"
     assert primary.gpu == "L40S"
     assert (primary.max_prompt_tokens, primary.max_output_tokens, primary.max_model_len) == (
-        12288, 2048, 16384)
+        28672, 4096, 32768)
 
 
 def test_fallback_profiles() -> None:
@@ -68,7 +68,7 @@ def test_primary_serve_args_match_the_proven_launch() -> None:
         "--revision", "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
         "--served-model-name", "adops-analysis",
         "--host", "0.0.0.0", "--port", "8000",
-        "--max-model-len", "16384",
+        "--max-model-len", "32768",
         "--max-num-seqs", "1",
         "--gpu-memory-utilization", "0.88",
         "--enforce-eager",

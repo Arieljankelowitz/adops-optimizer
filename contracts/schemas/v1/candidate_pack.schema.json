@@ -1,5 +1,68 @@
 {
   "$defs": {
+    "AnswerGuide": {
+      "additionalProperties": false,
+      "description": "Code-computed answer form for one candidate, derived from the validator's rules.\n\nIt narrows what the model may select; it never relaxes a rule. Every\nobservation option is a statement the strict validator accepts for this\ncandidate, so the model chooses evidence instead of assembling fact roles.",
+      "properties": {
+        "allowed_decisions": {
+          "items": {
+            "$ref": "#/$defs/Decision"
+          },
+          "minItems": 1,
+          "title": "Allowed Decisions",
+          "type": "array"
+        },
+        "effective_restrictions": {
+          "items": {
+            "$ref": "#/$defs/InferenceRestriction"
+          },
+          "title": "Effective Restrictions",
+          "type": "array"
+        },
+        "observation_options": {
+          "items": {
+            "$ref": "#/$defs/ObservationStatement"
+          },
+          "maxItems": 24,
+          "title": "Observation Options",
+          "type": "array"
+        },
+        "other_quality_issues": {
+          "items": {
+            "$ref": "#/$defs/QualityIssueSummary"
+          },
+          "title": "Other Quality Issues",
+          "type": "array"
+        },
+        "recommend_test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TestRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scenario_labels": {
+          "items": {
+            "$ref": "#/$defs/ScenarioLabels"
+          },
+          "title": "Scenario Labels",
+          "type": "array"
+        }
+      },
+      "required": [
+        "effective_restrictions",
+        "allowed_decisions",
+        "observation_options",
+        "recommend_test",
+        "scenario_labels",
+        "other_quality_issues"
+      ],
+      "title": "AnswerGuide",
+      "type": "object"
+    },
     "Assumption": {
       "additionalProperties": false,
       "description": "A test parameter. Never historical evidence; rendered in its own list.",
@@ -302,6 +365,16 @@
       "title": "CoverageStatus",
       "type": "string"
     },
+    "Decision": {
+      "enum": [
+        "recommend_test",
+        "investigate_first",
+        "reject",
+        "merge"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
     "DetectorFamily": {
       "enum": [
         "scale_winner",
@@ -521,6 +594,41 @@
         "zero_floor_request_share"
       ],
       "title": "MetricKey",
+      "type": "string"
+    },
+    "ObservationStatement": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_ids": {
+          "items": {
+            "pattern": "^F_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "template_id": {
+          "$ref": "#/$defs/ObservationTemplateId"
+        }
+      },
+      "required": [
+        "template_id",
+        "fact_ids"
+      ],
+      "title": "ObservationStatement",
+      "type": "object"
+    },
+    "ObservationTemplateId": {
+      "enum": [
+        "metric_value",
+        "metric_vs_baseline",
+        "trend",
+        "coverage",
+        "concentration"
+      ],
+      "title": "ObservationTemplateId",
       "type": "string"
     },
     "Period": {
@@ -772,6 +880,38 @@
       "title": "QualityIssue",
       "type": "object"
     },
+    "QualityIssueSummary": {
+      "additionalProperties": false,
+      "description": "Quality issues on a candidate whose restrictions cannot touch its claims, by rule.",
+      "properties": {
+        "inference_restrictions": {
+          "items": {
+            "$ref": "#/$defs/InferenceRestriction"
+          },
+          "title": "Inference Restrictions",
+          "type": "array"
+        },
+        "issue_count": {
+          "minimum": 1,
+          "title": "Issue Count",
+          "type": "integer"
+        },
+        "rule_id": {
+          "$ref": "#/$defs/QualityRuleId"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "required": [
+        "rule_id",
+        "severity",
+        "issue_count",
+        "inference_restrictions"
+      ],
+      "title": "QualityIssueSummary",
+      "type": "object"
+    },
     "QualityRuleId": {
       "enum": [
         "DQ01",
@@ -960,6 +1100,47 @@
       "title": "Scenario",
       "type": "object"
     },
+    "ScenarioLabels": {
+      "additionalProperties": false,
+      "description": "The labels a recommendation must carry when it cites this scenario.",
+      "properties": {
+        "assumption_ids": {
+          "items": {
+            "pattern": "^A_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Assumption Ids",
+          "type": "array"
+        },
+        "prerequisite_codes": {
+          "items": {
+            "$ref": "#/$defs/PrerequisiteCode"
+          },
+          "title": "Prerequisite Codes",
+          "type": "array"
+        },
+        "risk_codes": {
+          "items": {
+            "$ref": "#/$defs/RiskCode"
+          },
+          "title": "Risk Codes",
+          "type": "array"
+        },
+        "scenario_id": {
+          "pattern": "^S_[0-9a-f]{16}$",
+          "title": "Scenario Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scenario_id",
+        "assumption_ids",
+        "prerequisite_codes",
+        "risk_codes"
+      ],
+      "title": "ScenarioLabels",
+      "type": "object"
+    },
     "ScenarioTemplate": {
       "enum": [
         "additional_eligible_requests",
@@ -1014,6 +1195,42 @@
       ],
       "title": "Severity",
       "type": "string"
+    },
+    "TestRequirements": {
+      "additionalProperties": false,
+      "description": "What a ``recommend_test`` decision must carry for this candidate.",
+      "properties": {
+        "assumption_ids": {
+          "items": {
+            "pattern": "^A_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Assumption Ids",
+          "type": "array"
+        },
+        "success_metric_keys": {
+          "items": {
+            "$ref": "#/$defs/MetricKey"
+          },
+          "title": "Success Metric Keys",
+          "type": "array"
+        },
+        "test_template_ids": {
+          "items": {
+            "$ref": "#/$defs/TestTemplateId"
+          },
+          "minItems": 1,
+          "title": "Test Template Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "test_template_ids",
+        "assumption_ids",
+        "success_metric_keys"
+      ],
+      "title": "TestRequirements",
+      "type": "object"
     },
     "TestTemplateId": {
       "enum": [
@@ -1105,6 +1322,17 @@
   "additionalProperties": false,
   "description": "Bounded evidence sent to the model for one candidate. No raw rows.",
   "properties": {
+    "answer_guide": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnswerGuide"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "assumptions": {
       "items": {
         "$ref": "#/$defs/Assumption"
