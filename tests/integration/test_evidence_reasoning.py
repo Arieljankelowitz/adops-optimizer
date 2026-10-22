@@ -63,7 +63,7 @@ def test_real_fixture_tools_and_ranking_repair_hook_use_strict_validator(repair)
         seen["pack"] = payload
         account = next(
             s
-            for s in payload["segments"]
+            for s in payload["untrusted_segment_labels"]
             if not s["filters"] and s["cohort_id"] == "full_input"
         )
         call = DailyTrendArgs(
@@ -75,13 +75,16 @@ def test_real_fixture_tools_and_ranking_repair_hook_use_strict_validator(repair)
     def final_response(request):
         payload = seen["pack"]
         candidate = payload["candidate"]
-        table = payload["facts"]
-        for row in table["rows"]:
-            fact = dict(zip(table["fields"], row, strict=True))
+        for row in payload["facts"]:
+            fact = dict(zip(payload["fact_fields"], row, strict=True))
+            fact["segment_id"] = payload["untrusted_segment_labels"][
+                fact.pop("segment_index")
+            ]["segment_id"]
+            fact["period_id"] = payload["periods"][fact.pop("period_index")]["period_id"]
             fact.update(
                 zip(
-                    table["type_fields"],
-                    table["types"][fact.pop("type_index")],
+                    payload["fact_type_fields"],
+                    payload["fact_types"][fact.pop("type_index")],
                     strict=True,
                 )
             )
