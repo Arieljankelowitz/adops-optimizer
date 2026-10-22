@@ -1,4 +1,8 @@
-"""Streamlit app: upload or synthetic input, warnings first, evidence, drill-downs, report.
+"""Streamlit app: upload a CSV (or use the sample), run, read the short report.
+
+The main flow is upload, run with live progress, then the short report with a
+download button. Data-quality detail, metrics, candidates, drill-downs and
+validation live under a secondary "Details" tab.
 
 Run locally with ``uv run streamlit run app.py``.
 
@@ -384,7 +388,7 @@ def _event_rows(events: tuple[ProgressEvent, ...]) -> list[dict]:
              "detail": e.message_code} for e in events]
 
 
-def _progress_view(events: tuple[ProgressEvent, ...]) -> None:
+def _progress_view(events: tuple[ProgressEvent, ...], detailed: bool = True) -> None:
     if not events:
         st.caption("No progress recorded yet.")
         return
@@ -398,6 +402,13 @@ def _progress_view(events: tuple[ProgressEvent, ...]) -> None:
     st.dataframe(pd.DataFrame([{
         "stage": T.STAGE_LABELS[s], "state": latest[s].value if s in latest else "pending",
     } for s in pipeline]), hide_index=True)
+    if not detailed:
+        analysed = {e.candidate_id for e in events if e.candidate_id
+                    and e.stage is ProgressStage.CANDIDATE_ANALYSIS
+                    and e.state is not ProgressState.STARTED}
+        if analysed:
+            st.caption(f"Findings analysed so far: {len(analysed)}")
+        return
     per_candidate: dict[str, dict] = {}
     for e in events:
         if e.candidate_id is None:
@@ -424,9 +435,9 @@ def _live_progress() -> None:
     if job is None:
         return
     status, events = job.snapshot()
-    st.info(f"Run {job.run_id or ''} is {status.value}. Reruns reconnect to this run; they do "
-            "not start another.")
-    _progress_view(events)
+    st.info(f"Analysis is {status.value}. Reruns reconnect to this run; they do not start "
+            "another.")
+    _progress_view(events, detailed=False)
     if not job.active:
         st.rerun()
 
@@ -557,40 +568,58 @@ def _validation_tab(outcome: RunOutcome) -> None:
 
 
 def _report_tab(outcome: RunOutcome) -> None:
-    # Escape "$" so Streamlit does not read money as LaTeX; the file keeps plain "$".
-    st.markdown(outcome.report.markdown.replace("$", "\\$"))
-    st.divider()
+    """The short report page, embedded as the downloadable file itself."""
+    # Code-rendered and escaped page without scripts, so embedding it as-is is safe.
+    st.iframe(outcome.html, height=1100)
     st.warning("Downloads contain private derived data (labels, totals and evidence). Store "
                "them only in an approved private location.")
     if st.checkbox("I understand these files are private derived data", key="private_ack"):
         run_id = outcome.artifact.manifest.run_id
+        st.download_button("Download report (HTML)", outcome.html,
+                           file_name=f"{run_id}_report.html", mime="text/html", key="dl_html")
         st.download_button("Download report (Markdown)", outcome.report.markdown,
                            file_name=f"{run_id}_report.md", mime="text/markdown",
                            key="dl_report")
-        st.download_button("Download full run bundle (JSON evidence, zip)",
-                           bundle_zip(outcome), file_name=f"{run_id}_bundle.zip",
-                           mime="application/zip", key="dl_bundle")
+
+
+def _details_tab(outcome: RunOutcome) -> None:
+    """Everything behind the short report: quality, metrics, candidates, drill-downs, audit."""
+    sections = st.tabs(["Data quality", "Summary", "Metrics", "Candidates", "Progress",
+                        "Drill-down", "Validation", "Full audit report"])
+    with sections[0]:
+        _warnings(outcome)
+    with sections[1]:
+        _summary_tab(outcome)
+    with sections[2]:
+        _metrics_tab(outcome)
+    with sections[3]:
+        _candidates_tab(outcome)
+    with sections[4]:
+        _progress_view(outcome.events)
+    with sections[5]:
+        _drilldown_tab(outcome)
+    with sections[6]:
+        _validation_tab(outcome)
+    with sections[7]:
+        # Escape "$" so Streamlit does not read money as LaTeX; the file keeps plain "$".
+        st.markdown(outcome.full_report.markdown.replace("$", "\\$"))
+        if st.session_state.get("private_ack"):
+            st.download_button("Download full run bundle (JSON evidence, zip)",
+                               bundle_zip(outcome), file_name=(
+                                   f"{outcome.artifact.manifest.run_id}_bundle.zip"),
+                               mime="application/zip", key="dl_bundle")
+        else:
+            st.caption("Tick the private-data acknowledgement on the Report tab to download "
+                       "the full run bundle.")
 
 
 def _show(outcome: RunOutcome) -> None:
     _banner(outcome)
-    _warnings(outcome)
-    tabs = st.tabs(["Summary", "Metrics", "Candidates", "Progress", "Drill-down",
-                    "Validation", "Report"])
-    with tabs[0]:
-        _summary_tab(outcome)
-    with tabs[1]:
-        _metrics_tab(outcome)
-    with tabs[2]:
-        _candidates_tab(outcome)
-    with tabs[3]:
-        _progress_view(outcome.events)
-    with tabs[4]:
-        _drilldown_tab(outcome)
-    with tabs[5]:
-        _validation_tab(outcome)
-    with tabs[6]:
+    report, details = st.tabs(["Report", "Details"])
+    with report:
         _report_tab(outcome)
+    with details:
+        _details_tab(outcome)
 
 
 # --- Main ------------------------------------------------------------------
@@ -601,8 +630,8 @@ def main() -> None:
     ss = _state()
     _collect_finished_job()
     st.title("Ad-performance optimizer")
-    st.caption("Python measures; the self-hosted model evaluates and explains; code validates "
-               "and renders every number.")
+    st.caption("Upload a daily ad-performance CSV to get a short, ranked list of optimization "
+               "recommendations. Every number is computed by code from your data.")
     mode, data, config = _sidebar()
 
     if mode == MODE_DEMO:
@@ -618,8 +647,6 @@ def main() -> None:
         return
 
     key = cache_key(input_sha256(data), config)
-    st.caption(f"Input fingerprint `{key.input_sha256[:16]}…` · cache key "
-               f"`{key.digest()}`")
     job = ss.jobs.current
     running = job is not None and job.active
     cached = ss.cache.get(key)
@@ -631,9 +658,6 @@ def main() -> None:
         job.cancel()
         st.info("Cancellation requested: no new stage or model call will start. An in-flight "
                 "call is not interrupted and may still be billed.")
-    if cached is None and not running:
-        st.caption("No cached run matches this exact input and configuration. Run "
-                   "deterministic diagnostics (no model profile) or open the synthetic demo.")
     if start:
         try:
             job = ss.jobs.submit(key, data, config)

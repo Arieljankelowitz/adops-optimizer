@@ -309,9 +309,11 @@ def test_unreadable_file_gives_a_fatal_quality_report_through_the_real_modules()
     outcome, events = _run(RunConfig())  # default stages: the real loader and quality rules
     assert outcome.status is RunStatus.DETERMINISTIC_ONLY
     assert outcome.artifact.quality.has_fatal
-    md = outcome.report.markdown
+    md = outcome.full_report.markdown
     assert "### Fatals" in md and "Analysis stopped" in md
     assert "fatal data-quality issue blocks" in md
+    assert "fatal data-quality issue blocks" in outcome.report.markdown
+    assert "fatal data-quality issue blocks" in outcome.html
     assert outcome.artifact.quality.run_namespace == outcome.artifact.manifest.run_namespace
 
 

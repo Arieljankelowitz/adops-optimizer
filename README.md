@@ -67,7 +67,8 @@ CSV bytes (in memory; SHA-256 before parsing)
      bounded drill-down tools
   -> strict validation, at most one repair              llm/validator.py
   -> model ranking/merge + summary themes, validated    llm/ranking.py
-  -> code-rendered Markdown report + audit map          report/render.py
+  -> code-rendered short report (HTML + Markdown),      report/summary.py, render.py
+     long audit rendering, both with audit maps
   -> private run bundle, Streamlit drill-down, download report/bundle.py, app.py
 ```
 
@@ -144,37 +145,43 @@ tested on a file are reported as "not testable", never as passed.
 
 ## The report
 
-`report/render.py` builds every recommendation in a fixed test form:
+The primary output is a short, self-contained `report.html` (and a matching
+`report.md`) built by `report/summary.py`: a one-line account summary
+(requests, revenue, profit, margin), at most three data-quality caveats that
+actually affect the conclusions, then five to ten ranked recommendation cards
+and two simple charts (each slice against its baseline; requests and revenue by
+slice). Each card has the assignment's shape:
 
-1. **Test / investigation** and its code-rendered target
-2. **What the data shows**: templated observations (value, comparison with a
-   baseline or matched peer, trend, coverage, concentration) with fact IDs,
-   period, denominators and units
-3. **What it does not prove**: counter-evidence, quality restrictions,
-   coverage, family-specific and causal limits
-4. **Hypothesis — unverified**
-5. **Controlled experiment**: design, target eligibility, treatment and
-   holdout, randomization unit, reversible rollout, prerequisites
-6. **How to judge it**: incremental total profit, guardrails, duration and
-   stop rules from assumptions
-7. **Conditional impact if the test works**, or "not estimable from this
-   export"
-8. **Test assumptions — not historical facts**, with bounds and who set them
-9. **Risks / additional data**
-10. **Confidence in the observation**; the intervention effect is unproven
+- **Opportunity**: the slice in plain words (Supply ID / country / size /
+  placement / device), with its **current requests, revenue and profit**
+- **Observation**: the data behind it (value against the account or matched
+  peers, trend, coverage), each value hoverable for its fact ID
+- **Recommendation**: a plain verb (scale up, throttle, raise or lower floor,
+  review margin terms, reconcile counters, investigate) and the concrete test,
+  with allocation, duration and stop-loss
+- **Estimated opportunity**: dollars, labelled as an estimate with its key
+  assumption in one clause, or "not estimable from this export"
 
-The renderer writes each value through one formatter and records a span
-(offsets, source ID, role) for it. `audit_report` then requires every digit in
-the Markdown to lie inside a span whose source resolves in the run (fact,
-assumption, scenario, segment, period, manifest); `render_report` refuses to
-return a report that fails. Static wording in `report/text.py` contains no
-digits, which a test enforces. The model never writes report text.
+Findings the model proposed while exploring, rather than a detector rule,
+carry a **found by AI** badge. What the data does not prove, test design,
+guardrails, assumptions, fact IDs and run metadata sit behind a collapsed
+**Details** per card and an appendix. The long, fixed test-form rendering
+(`report/render.py`) is kept as `full_report.md` in the run bundle.
+
+Every value is written through one formatter and carries the ID of the
+registry object it came from (a span in Markdown, a `data-src` attribute in
+HTML). `audit_summary` requires every digit in both outputs to sit inside such
+a value whose source resolves in the run, and replays the renderer to require
+identical text; `render_summary` refuses to return a report that fails. Static
+wording in `report/text.py` contains no digits, which a test enforces. The
+model never writes report text or numbers.
 
 Run statuses are unmistakable in the header and the app banner:
 `final`, `partial` (some candidates or the ranking did not validate),
 `deterministic_only` (no model output; a diagnostic draft), `failed` and
 `cached_previous`. A sample report rendered from the synthetic run is in
-[`examples/synthetic/demo_report.md`](examples/synthetic/demo_report.md).
+[`examples/synthetic/demo_report.html`](examples/synthetic/demo_report.html)
+and [`demo_report.md`](examples/synthetic/demo_report.md).
 
 ## Detectors, tools and scenarios
 
@@ -209,8 +216,8 @@ non-thinking client and typed handlers; a refused/invalid native protocol switch
 to the JSON loop within the existing turn budget. Neither mode executes arbitrary
 Python, SQL, shell commands, network requests or filesystem operations.
 
-After rule judgments, `RunConfig.budget.explore_enabled` optionally enables a
-separate discovery stage (default **false**): at most four discovery turns, three
+After rule judgments, `RunConfig.budget.explore_enabled` enables a
+separate discovery stage (default **true**; set it false to skip): at most four discovery turns, three
 tool executions and three proposals. `max_explore_proposals` can lower that cap.
 Proposals must reference facts actually returned by discovery tools, not merely
 IDs seen in a prompt. They are labelled **model-proposed (not detector-raised)**
@@ -296,23 +303,20 @@ uv sync
 uv run pytest                      # no network, no model, synthetic data only
 uv run streamlit run app.py        # local app
 uv run python cli.py demo          # print the synthetic cached run
-uv run python cli.py run INPUT.csv [--model-profile ID] [--out PRIVATE_DIR]
+uv run python cli.py run INPUT.csv [--model-profile ID] [--out PRIVATE_DIR] [--html FILE]
 uv run python scripts/wake_model.py # wake the endpoint before a live run
 uv run python cli.py show PRIVATE_DIR/run_<id>
 ```
 
 In the app, choose **Upload a CSV**, the **Synthetic sample CSV** or the
-**Cached demo run (synthetic)** in the sidebar. A run shows, in order: the
-status banner, data-quality warnings, then tabs for the data summary (input
-fingerprint, account totals, reconciliation, full and sensitivity cohorts),
-sortable metrics at every aggregation level, flagged candidates with daily
-charts, matched comparisons and contrary evidence (including rejected and
-exploratory ones), live stage and per-candidate progress (readiness, warm
-inference, tool calls, validation), drill-downs, validation results with a
-fact inspector and separate observation and scenario views, and the report
-preview with downloads. Test assumptions are edited in the sidebar within
-approved bounds; an edit creates a new run namespace and cache key. A run can
-be cancelled: no new stage or model call starts, but an in-flight call is not
+**Cached demo run (synthetic)** in the sidebar, run the analysis (live stage
+progress is shown while it runs), and read the short report on the **Report**
+tab with its HTML and Markdown downloads. A secondary **Details** tab holds the
+data-quality findings, data summary, sortable metrics, candidates with daily
+charts, progress, drill-downs, validation with a fact inspector, and the full
+audit report. Test assumptions are edited in the sidebar within approved
+bounds; an edit creates a new run namespace and cache key. A run can be
+cancelled: no new stage or model call starts, but an in-flight call is not
 interrupted and may still be billed.
 
 Live tests are deselected by default; run them explicitly with
@@ -340,7 +344,8 @@ repository for private inputs and run bundles.
   data. The CLI writes a run bundle only with an explicit `--out`.
 - A run bundle (`manifest.json`, `run.json`, `quality.json`, `facts.json`,
   `assumptions.json`, `scenarios.json`, `candidates.json`, `analyses.json`,
-  `validation.json`, `report.json`, `report.md`, `render_audit.json`) records
+  `validation.json`, `report.json`, `report.md`, `report.html`,
+  `full_report.json`, `full_report.md`, `render_audit.json`) records
   each file's SHA-256 in the manifest; an edited or incomplete bundle is
   refused when loaded. The source path is never recorded.
 - Errors shown in the app or CLI carry stage-level messages only, never
@@ -404,7 +409,8 @@ pipeline/           load, quality, metrics, detectors, scenarios, evidence (impl
 llm/                client, profiles, validator, prompts, analysis, tools,
                     ranking (implemented)
 report/
-  render.py         Markdown renderer and post-render audit
+  summary.py        short hand-in report: Markdown and HTML from one audited form
+  render.py         long fixed-form Markdown renderer and post-render audit
   text.py           reviewed wording (no digits)
   bundle.py         private run bundle: assemble, hash, write, verify, relabel as cached
 runner.py           stage orchestration, progress, cancel, jobs, cache key, session cache

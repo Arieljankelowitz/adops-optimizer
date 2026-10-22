@@ -512,3 +512,89 @@ HORIZON_TEXT = "Horizon: comparable exposure over the observed period; no annual
 NO_PORTFOLIO_SUM = (
     "Scenarios are not summed: they may overlap or be mutually exclusive."
 )
+
+
+# --- Short report ------------------------------------------------------------
+
+SHORT_SUBTITLE = "Ranked opportunities from the uploaded export"
+FOUND_BY_AI = "found by AI"
+FOUND_BY_AI_HINT = (
+    "Proposed by the model while exploring the data, not raised by a detector rule. "
+    "It passed the same evidence checks."
+)
+
+# Plain verb and one-line action per test template.
+ACTIONS: dict[TestTemplateId, tuple[str, str]] = {
+    TestTemplateId.MATCHED_ALLOCATION_HOLDOUT: (
+        "Scale up",
+        "Send more comparable traffic to this slice as a controlled test against a "
+        "concurrent holdout.",
+    ),
+    TestTemplateId.TARGETED_THROTTLE_HOLDOUT: (
+        "Throttle",
+        "Throttle part of this slice's low-yield requests against a concurrent holdout.",
+    ),
+    TestTemplateId.FLOOR_INCREASE_RANDOMIZED: (
+        "Raise floor",
+        "Raise the floor slightly on a randomized share of this slice's requests, with a "
+        "concurrent holdout at the current floor.",
+    ),
+    TestTemplateId.FLOOR_DECREASE_RANDOMIZED: (
+        "Lower floor",
+        "Lower the floor slightly on a randomized share of this slice's requests, with a "
+        "concurrent holdout at the current floor.",
+    ),
+    TestTemplateId.COMMERCIAL_TERMS_REVIEW: (
+        "Review margin terms",
+        "Check rounding, adjustments and contract terms for this slice before any "
+        "negotiation.",
+    ),
+    TestTemplateId.COUNTER_RECONCILIATION: (
+        "Reconcile counters",
+        "Reconcile wins, impressions and requests against delivery logs before any fix.",
+    ),
+    TestTemplateId.INSTRUMENTATION_FEASIBILITY: (
+        "Investigate",
+        "Check what data and mechanism a controlled test of this slice would need.",
+    ),
+}
+INVESTIGATE_ACTION = (
+    "Investigate this slice before changing anything: confirm the pattern is real, then "
+    "design a controlled test if it holds."
+)
+INVESTIGATE_FIRST_PREFIX = "First clear the prerequisites under Details, then "
+RANDOMIZED_TESTS = frozenset({
+    TestTemplateId.MATCHED_ALLOCATION_HOLDOUT,
+    TestTemplateId.TARGETED_THROTTLE_HOLDOUT,
+    TestTemplateId.FLOOR_INCREASE_RANDOMIZED,
+    TestTemplateId.FLOOR_DECREASE_RANDOMIZED,
+})
+
+# (before, after) wrapped around the scenario's key assumption value.
+ASSUMPTION_CLAUSES: dict[ScenarioTemplate, tuple[str, str]] = {
+    ScenarioTemplate.ADDITIONAL_ELIGIBLE_REQUESTS: (
+        "Assumes ", " more eligible requests at the slice's observed yield."),
+    ScenarioTemplate.THROTTLE: ("Assumes ", " of the slice's requests are throttled."),
+    ScenarioTemplate.MARGIN_NEGOTIATION_SENSITIVITY: (
+        "Assumes margin rises by ", " at unchanged revenue."),
+    ScenarioTemplate.RENDERING_SENSITIVITY: (
+        "Assumes a ", " relative change in realized impressions."),
+}
+ESTIMATE_NOTE = "Estimate, conditional on the test working; not a forecast."
+GAIN_LEAD = "About "
+OVER_PERIOD = " over the observed period"
+EXTRA_PROFIT = " extra profit"
+EXTRA_REVENUE = " extra revenue"
+THROTTLE_NO_GAIN = (
+    "No dollar gain can be estimated from this export; throttling puts about "
+)
+AT_RISK = " at risk"
+FEW_RECOMMENDATIONS = (
+    "Fewer recommendations are supportable from this evidence; none were invented to "
+    "fill the list."
+)
+NO_CARDS_FATAL = (
+    "A fatal data-quality issue blocks model recommendations. Only the caveats and "
+    "appendix are shown."
+)
+NO_CARDS = "No validated model recommendations are included in this run."

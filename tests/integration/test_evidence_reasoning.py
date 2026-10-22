@@ -120,6 +120,7 @@ def test_real_fixture_tools_and_ranking_repair_hook_use_strict_validator(repair)
     config = RunConfig(
         model_profile_id=load_profile().profile_id,
         evidence=EvidenceConfig(max_candidates=1),
+        budget=RunBudget(explore_enabled=False),
     )
     outcome = execute(
         io.BytesIO(SAMPLE.read_bytes()),

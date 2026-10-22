@@ -5,16 +5,17 @@ export. The run exercises every report and app surface: warnings of each
 severity (and a fatal variant), account totals with a sensitivity cohort,
 daily series, matched and unmatched comparisons, every observation template,
 every recommendation field, merge, model rejection, validation rejection,
-an unranked recommendation, tool evidence with truncation, overlapping
-scenarios, a not-identifiable impact and a prompt-injection segment label.
+an unranked recommendation, a model-proposed (explore) finding, tool evidence
+with truncation, overlapping scenarios, a not-identifiable impact and a
+prompt-injection segment label.
 
 ``build_demo_outcome(status)`` returns the run in any ``RunStatus``; the
 committed fixture is the ``final`` variant:
 
     uv run python scripts/build_demo_run.py
 
-writes ``examples/synthetic/demo_run.json`` (the sealed bundle) and
-``examples/synthetic/demo_report.md`` (its rendered report).
+writes ``examples/synthetic/demo_run.json`` (the sealed bundle) and the short
+report as ``examples/synthetic/demo_report.md`` and ``demo_report.html``.
 """
 
 import hashlib
@@ -110,6 +111,7 @@ from report.bundle import RunOutcome, assemble, to_bundle  # noqa: E402
 
 DEMO_JSON = REPO_ROOT / "examples" / "synthetic" / "demo_run.json"
 DEMO_REPORT = REPO_ROOT / "examples" / "synthetic" / "demo_report.md"
+DEMO_REPORT_HTML = REPO_ROOT / "examples" / "synthetic" / "demo_report.html"
 
 DAYS = tuple(date(2031, 3, 3) + timedelta(days=n) for n in range(7))
 GENERATED_AT = datetime(2031, 3, 10, 9, 0, tzinfo=UTC)
@@ -256,6 +258,7 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
     s_inject = b.segment({D.SUPPLY_ID: "60894", D.COUNTRY: INJECTION_LABEL})
     s_budget = b.segment({D.SUPPLY_ID: "73005", D.DEVICE_TYPE: "Desktop"})
     s_other = b.segment({D.SUPPLY_ID: "73005", D.COUNTRY: "BR", D.SIZE: "other"})
+    s_explore = b.segment({D.SUPPLY_ID: "90417", D.COUNTRY: "FR", D.DEVICE_TYPE: "Mobile"})
 
     # Quality issue IDs first; facts cite them in provenance.
     q = {name: b.id(IdPrefix.QUALITY_ISSUE, name) for name in (
@@ -337,11 +340,13 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
                   "345.76")
     inject = b.slice_facts("inject", s_inject, full, 7_800_000, "61.20", "44.90", "16.30")
     budget = b.slice_facts("budget", s_budget, full, 15_100_000, "310.40", "236.12", "74.28")
+    explore = b.slice_facts("explore", s_explore, full, 9_400_000, "512.60", "301.20", "211.40")
 
     scale_vs_account = b.compare("scale ppm vs account", sc["ppm"], acc["ppm"])
     scale_vs_peer = b.compare("scale ppm vs peer", sc["ppm"], peer["ppm"],
                               (D.COUNTRY, D.SIZE, D.DEVICE_TYPE, D.PLACEMENT_TYPE))
     waste_vs_account = b.compare("waste rpm vs account", waste["rpm"], acc["rpm"])
+    explore_vs_account = b.compare("explore ppm vs account", explore["ppm"], acc["ppm"])
     scale_share = b.fact("scale request share", s_scale, full, MetricKey.REQUEST_SHARE,
                          Decimal("0.0116"), Unit.FRACTION, kind=FactKind.CALCULATED,
                          parents=(sc["requests"], acc["requests"]))
@@ -391,6 +396,10 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
                     Unit.EXPORT_DOLLAR, (sc["requests"], sc["rpm"]))
     add_profit = sfact("scenario additional profit", s_scale, MetricKey.PROFIT, "77.01",
                        Unit.EXPORT_DOLLAR, (sc["requests"], sc["ppm"]))
+    ex_rev = sfact("scenario explore additional revenue", s_explore, MetricKey.REVENUE, "51.26",
+                   Unit.EXPORT_DOLLAR, (explore["requests"], explore["rpm"]))
+    ex_profit = sfact("scenario explore additional profit", s_explore, MetricKey.PROFIT, "21.14",
+                      Unit.EXPORT_DOLLAR, (explore["requests"], explore["ppm"]))
     parent_profit = sfact("scenario parent additional profit", s_parent, MetricKey.PROFIT,
                           "91.54", Unit.EXPORT_DOLLAR, (parent["requests"], parent["ppm"]))
     freed = sfact("scenario freed requests", s_waste, MetricKey.REQUESTS, "206000000",
@@ -441,7 +450,16 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
                         "0.50", Unit.FRACTION, "0.05", "0.90", AssumptionSelector.USER)
     a_margin = assume("margin points", s_margin, "Margin sensitivity", "margin_sensitivity_points",
                       "0.05", Unit.PERCENTAGE_POINTS, "0.01", "0.10")
-    assumptions = [a_alloc, a_days, a_stop, a_add, a_add_parent, a_throttle, a_margin]
+    a_alloc_x = assume("allocation explore", s_explore, "Treatment allocation",
+                       "test_allocation", "0.10", Unit.FRACTION, "0.01", "0.50")
+    a_days_x = assume("duration explore", s_explore, "Minimum test duration", "test_min_days",
+                      "7", Unit.DAYS, "7", "28")
+    a_stop_x = assume("stop loss explore", s_explore, "Relative total-profit stop-loss",
+                      "test_profit_stop_loss", "0.05", Unit.FRACTION, "0.01", "0.20")
+    a_add_x = assume("additional explore", s_explore, "Additional eligible request fraction",
+                     "additional_request_fraction", "0.10", Unit.FRACTION, "0.01", "0.50")
+    assumptions = [a_alloc, a_days, a_stop, a_add, a_add_parent, a_throttle, a_margin,
+                   a_alloc_x, a_days_x, a_stop_x, a_add_x]
 
     overlap = OverlapGroup(overlap_group_id=b.id(IdPrefix.OVERLAP_GROUP, "scale parent"),
                            candidate_ids=[b.id(IdPrefix.CANDIDATE, "scale"),
@@ -472,6 +490,12 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
                       prereqs=[PrerequisiteCode.CONFIRM_ELIGIBLE_INVENTORY,
                                PrerequisiteCode.CONFIRM_CAPACITY],
                       limits=[RiskCode.DEMAND_SATURATION, RiskCode.DISPLACED_PROFIT_UNKNOWN])
+    sc_explore = scenario("additional explore", ScenarioTemplate.ADDITIONAL_ELIGIBLE_REQUESTS,
+                          s_explore, [explore["requests"], explore["rpm"], explore["ppm"]],
+                          [a_add_x], [ex_rev, ex_profit],
+                          DisplacedCostTreatment.UNKNOWN_DISCLOSED,
+                          prereqs=[PrerequisiteCode.CONFIRM_ELIGIBLE_INVENTORY],
+                          limits=[RiskCode.DEMAND_SATURATION])
     sc_parent = scenario("additional parent", ScenarioTemplate.ADDITIONAL_ELIGIBLE_REQUESTS,
                          s_parent, [parent["requests"], parent["ppm"]], [a_add_parent],
                          [parent_profit], DisplacedCostTreatment.UNKNOWN_DISCLOSED,
@@ -491,16 +515,16 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
                           DisplacedCostTreatment.NOT_APPLICABLE,
                           prereqs=[PrerequisiteCode.RECONCILE_COUNTERS_WITH_LOGS],
                           limits=[RiskCode.COUNTER_SEMANTICS_UNKNOWN])
-    scenarios = [sc_add, sc_parent, sc_throttle, sc_margin, sc_unknown]
+    scenarios = [sc_add, sc_parent, sc_throttle, sc_margin, sc_unknown, sc_explore]
 
     # Candidates.
     def cand(name: str, family: DetectorFamily, seg: Segment, trigger: list[Fact], *,
              eligibility: EligibilityStatus = EligibilityStatus.ELIGIBLE,
              daily_facts: list[Fact] = (), peers: list[Fact] = (), counter: list[Fact] = (),
              issues: list[str] = (), overlaps: list[str] = (),
-             reason: str | None = None) -> Candidate:
+             reason: str | None = None, origin: str = "detector") -> Candidate:
         return Candidate(
-            candidate_id=b.id(IdPrefix.CANDIDATE, name), family=family,
+            origin=origin, candidate_id=b.id(IdPrefix.CANDIDATE, name), family=family,
             segment_id=seg.segment_id, period_id=full.period_id, eligibility=eligibility,
             trigger_fact_ids=[f.fact_id for f in trigger],
             daily_fact_ids=[f.fact_id for f in daily_facts],
@@ -533,8 +557,10 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
                     eligibility=EligibilityStatus.REJECTED, issues=[q["placeholder country"]],
                     reason="placeholder country label; not a targetable market")
     c_budget = cand("budget", DetectorFamily.MARGIN_LEAK, s_budget, [budget["margin"]])
+    c_explore = cand("explore", DetectorFamily.COMBINATION_OUTLIER, s_explore,
+                     [explore_vs_account], origin="model_proposed")
     candidates = [c_scale, c_parent, c_waste, c_margin, c_wins, c_trend, c_spiky, c_floor_low,
-                  c_floor_high, c_inject, c_budget]
+                  c_floor_high, c_inject, c_budget, c_explore]
 
     # Quality report.
     def issue(name: str, rule: QualityRuleId, severity: Severity, segs: list[Segment],
@@ -614,7 +640,7 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
         return ValidatedRecommendation(
             recommendation_id=b.id(IdPrefix.RECOMMENDATION, name), run_namespace=ns,
             recommendation=CandidateRecommendation(
-                candidate_id=c.candidate_id, decision=decision, segment_id=c.segment_id,
+                origin=c.origin, candidate_id=c.candidate_id, decision=decision, segment_id=c.segment_id,
                 period_id=c.period_id,
                 observation_statements=[ObservationStatement(template_id=t,
                                                              fact_ids=[f.fact_id for f in fs])
@@ -681,6 +707,16 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
         prereqs=[PrerequisiteCode.CONFIRM_EXPORT_SEMANTICS],
         risks=[RiskCode.MEASUREMENT_NOISE, RiskCode.ONE_OFF_CONCENTRATION],
         confidence=Confidence.LOW)
+    r_explore = rec(
+        "explore", c_explore, Decision.RECOMMEND_TEST,
+        [(T_.METRIC_VS_BASELINE, [explore["ppm"], acc["ppm"], explore_vs_account]),
+         (T_.METRIC_VALUE, [explore["profit"]])],
+        hypotheses=[HypothesisCode.DEMAND_QUALITY_OR_MIX_UNVERIFIED],
+        test=TestTemplateId.MATCHED_ALLOCATION_HOLDOUT,
+        assumed=[a_alloc_x, a_days_x, a_stop_x, a_add_x], scen=[sc_explore],
+        prereqs=[PrerequisiteCode.CONFIRM_ELIGIBLE_INVENTORY],
+        risks=[RiskCode.DEMAND_SATURATION, RiskCode.DISPLACED_PROFIT_UNKNOWN],
+        success=[MetricKey.PROFIT], confidence=Confidence.LOW)
     r_spiky = rec("spiky", c_spiky, Decision.REJECT, [(T_.CONCENTRATION, [spiky_share])],
                   counter=[spiky_share], confidence=Confidence.LOW)
     r_floor_low = rec("floor low", c_floor_low, Decision.MERGE,
@@ -693,7 +729,7 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
         prereqs=[PrerequisiteCode.OBTAIN_BID_DISTRIBUTIONS], risks=[RiskCode.REVENUE_AT_RISK],
         success=[MetricKey.PROFIT])
     recommendations = [r_scale, r_parent, r_waste, r_margin, r_wins, r_trend, r_spiky,
-                       r_floor_low, r_floor_high]
+                       r_floor_low, r_floor_high, r_explore]
 
     def tool(name: str, call: BreakdownArgs | DailyTrendArgs, returned: list[Fact],
              appended: list[Fact], other: list[Fact], truncated: bool) -> ToolEvidence:
@@ -732,6 +768,7 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
         analysis(c_spiky, r_spiky, C.COMPLETE),
         analysis(c_floor_low, r_floor_low, C.COMPLETE),
         analysis(c_floor_high, r_floor_high, C.COMPLETE),
+        analysis(c_explore, r_explore, C.COMPLETE, turns=2),
         analysis(c_budget, None, C.REJECTED_INVALID, turns=2, repairs=1),
     ]
     failures = {
@@ -751,8 +788,8 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
         ),
     }
     ranking = RankingIR(
-        ranked_recommendation_ids=[r.recommendation_id for r in (r_scale, r_waste, r_margin,
-                                                                 r_wins, r_trend)],
+        ranked_recommendation_ids=[r.recommendation_id for r in (r_scale, r_waste, r_explore,
+                                                                 r_margin, r_wins, r_trend)],
         merge_instructions=[MergeInstruction(target_recommendation_id=r_scale.recommendation_id,
                                              source_recommendation_ids=[
                                                  r_parent.recommendation_id])],
@@ -879,6 +916,7 @@ def rendered_files() -> dict[Path, str]:
         DEMO_JSON: json.dumps(payload, sort_keys=True, ensure_ascii=False,
                               separators=(",", ":")) + "\n",
         DEMO_REPORT: outcome.report.markdown,
+        DEMO_REPORT_HTML: outcome.html,
     }
 
 

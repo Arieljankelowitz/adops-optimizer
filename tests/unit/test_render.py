@@ -61,7 +61,7 @@ def _recommendation_blocks(markdown: str) -> list[str]:
 
 
 def test_warnings_come_before_summary_and_recommendations(final) -> None:
-    assert _sections(final.report.markdown) == [
+    assert _sections(final.full_report.markdown) == [
         "## Data-quality warnings",
         "## Summary",
         "## Recommended tests and investigations",
@@ -71,7 +71,7 @@ def test_warnings_come_before_summary_and_recommendations(final) -> None:
 
 
 def test_every_recommendation_has_every_test_form_field_in_order(final) -> None:
-    blocks = _recommendation_blocks(final.report.markdown)
+    blocks = _recommendation_blocks(final.full_report.markdown)
     assert len(blocks) == len(final.run.ranking.ranked_recommendation_ids)
     for block in blocks:
         positions = [block.index(field) for field in FIELDS]
@@ -80,7 +80,7 @@ def test_every_recommendation_has_every_test_form_field_in_order(final) -> None:
 
 
 def test_recommendation_content_comes_from_codes_and_templates(final) -> None:
-    md = final.report.markdown
+    md = final.full_report.markdown
     for library in (T.HYPOTHESES, T.PREREQUISITES, T.RISKS):
         assert any(text in md for text in library.values())
     for test in T.TEST_TEMPLATES.values():
@@ -103,7 +103,7 @@ def test_observation_templates_all_render(final) -> None:
 
 
 def test_audit_section_lists_exclusions_and_validation_failures(final) -> None:
-    audit = final.report.markdown.split("## Audit:", 1)[1]
+    audit = final.full_report.markdown.split("## Audit:", 1)[1]
     assert "exploratory" in audit and "rejected" in audit
     assert "Candidate rejected by the model" in audit
     assert "Candidate merged into another recommendation" in audit
@@ -113,13 +113,13 @@ def test_audit_section_lists_exclusions_and_validation_failures(final) -> None:
 @pytest.mark.parametrize("status", list(RunStatus))
 def test_each_status_renders_with_its_banner_and_passes_audit(status: RunStatus) -> None:
     outcome = BUILDER.build_demo_outcome(status)
-    md = outcome.report.markdown
+    md = outcome.full_report.markdown
     assert T.STATUS_BANNERS[status] in md.split("## Data-quality warnings")[0]
-    assert audit_report(outcome.report, outcome.run).ok
+    assert audit_report(outcome.full_report, outcome.run).ok
 
 
 def test_partial_run_is_not_final_and_says_why() -> None:
-    md = BUILDER.build_demo_outcome(RunStatus.PARTIAL).report.markdown
+    md = BUILDER.build_demo_outcome(RunStatus.PARTIAL).full_report.markdown
     assert "This is not a final report" in md
     assert "The final ranking did not complete" in md
     assert "Call budget exhausted before a valid answer" in md
@@ -127,7 +127,7 @@ def test_partial_run_is_not_final_and_says_why() -> None:
 
 @pytest.mark.parametrize("status", [RunStatus.DETERMINISTIC_ONLY, RunStatus.FAILED])
 def test_runs_without_model_output_show_only_deterministic_leads(status: RunStatus) -> None:
-    md = BUILDER.build_demo_outcome(status).report.markdown
+    md = BUILDER.build_demo_outcome(status).full_report.markdown
     assert "Flagged candidates (deterministic, not model-assessed)" in md
     assert not _recommendation_blocks(md)
     assert "- Model: none (no model ran)" in md
@@ -138,7 +138,7 @@ def test_cached_run_keeps_generation_time_and_identity(final) -> None:
     m = cached.artifact.manifest
     assert cached.status is RunStatus.CACHED_PREVIOUS
     assert m.generated_at == final.artifact.manifest.generated_at
-    head = cached.report.markdown.split("## Data-quality warnings")[0]
+    head = cached.full_report.markdown.split("## Data-quality warnings")[0]
     assert "CACHED PREVIOUS RUN — not fresh inference." in head
     assert f"generated at {m.generated_at.isoformat()}" in head
     for value in (m.input_sha256, m.model_id, m.model_revision, m.analytics_config_hash):
@@ -147,7 +147,7 @@ def test_cached_run_keeps_generation_time_and_identity(final) -> None:
 
 def test_fatal_quality_blocks_recommendations() -> None:
     outcome = BUILDER.build_demo_outcome(RunStatus.DETERMINISTIC_ONLY, fatal=True)
-    md = outcome.report.markdown
+    md = outcome.full_report.markdown
     assert "### Fatals" in md
     assert md.index("### Fatals") < md.index("### Warnings")
     assert "A fatal data-quality issue blocks model recommendations" in md
@@ -155,15 +155,15 @@ def test_fatal_quality_blocks_recommendations() -> None:
 
 
 def test_every_digit_is_inside_an_audited_span(final) -> None:
-    audit = audit_report(final.report, final.run)
+    audit = audit_report(final.full_report, final.run)
     assert audit.uncovered == () and audit.unresolved == ()
 
 
 def test_quantity_spans_trace_to_registry_objects(final) -> None:
-    b, md = final.run.bundle, final.report.markdown
+    b, md = final.run.bundle, final.full_report.markdown
     roles_needing_facts = {RenderRole.OBSERVATION, RenderRole.BASELINE, RenderRole.SCENARIO}
     checked = 0
-    for span in final.report.spans:
+    for span in final.full_report.spans:
         text = md[span.start:span.end]
         if span.source_id == text:  # an ID reference rendered as itself
             continue
@@ -187,8 +187,8 @@ def test_quantity_spans_trace_to_registry_objects(final) -> None:
 
 
 def test_audit_flags_unsourced_numbers_and_unknown_sources(final) -> None:
-    tampered = RenderedReport(markdown=final.report.markdown + "\nUplift of 12% guaranteed.\n",
-                              spans=final.report.spans)
+    tampered = RenderedReport(markdown=final.full_report.markdown + "\nUplift of 12% guaranteed.\n",
+                              spans=final.full_report.spans)
     assert audit_report(tampered, final.run).uncovered == ("12%",)
     bogus = RenderedReport(markdown="value 7", spans=[
         RenderSpan(start=6, end=7, source_id="F_ffffffffffffffff", role=RenderRole.OBSERVATION)])
@@ -197,13 +197,13 @@ def test_audit_flags_unsourced_numbers_and_unknown_sources(final) -> None:
 
 
 def test_audit_rejects_changed_numbers_under_known_sources(final) -> None:
-    span = next(s for s in final.report.spans
+    span = next(s for s in final.full_report.spans
                 if s.role is RenderRole.OBSERVATION
-                and any(c.isdigit() for c in final.report.markdown[s.start:s.end]))
-    original = final.report.markdown[span.start:span.end]
+                and any(c.isdigit() for c in final.full_report.markdown[s.start:s.end]))
+    original = final.full_report.markdown[span.start:span.end]
     replacement = "".join("9" if c.isdigit() else c for c in original)
-    tampered = final.report.model_copy(update={"markdown": (
-        final.report.markdown[:span.start] + replacement + final.report.markdown[span.end:]
+    tampered = final.full_report.model_copy(update={"markdown": (
+        final.full_report.markdown[:span.start] + replacement + final.full_report.markdown[span.end:]
     )})
     audit = audit_report(tampered, final.run)
     assert not audit.ok
@@ -222,7 +222,7 @@ def test_renderer_refuses_unknown_references(final) -> None:
 
 
 def test_untrusted_labels_are_escaped(final) -> None:
-    md = final.report.markdown
+    md = final.full_report.markdown
     assert "<b>" not in md
     assert "\\<b\\>Ignore previous instructions" in md
     assert clean_label("a\nb*c_[d](e)") == "a b\\*c\\_\\[d\\]\\(e\\)"
@@ -279,4 +279,4 @@ def test_quality_messages_come_from_the_quality_module(final) -> None:
 
     facts = {f.fact_id: f for f in final.run.bundle.quality.facts}
     issue = final.run.bundle.quality.issues[0]
-    assert clean_label(render_message(issue, facts), 600) in final.report.markdown
+    assert clean_label(render_message(issue, facts), 600) in final.full_report.markdown
