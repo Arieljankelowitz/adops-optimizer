@@ -74,7 +74,9 @@ def proposals(router, n=3):
 
 def test_explore_disabled_no_calls(ctx):
     client, router = FakeClient([]), ExplorerRouter(ctx)
-    result = explore_candidates(ctx.bundle, router, client, RunBudget())
+    result = explore_candidates(
+        ctx.bundle, router, client, RunBudget(explore_enabled=False)
+    )
     assert result.status == "disabled" and not result.packs
     assert not client.requests and not router.calls
 

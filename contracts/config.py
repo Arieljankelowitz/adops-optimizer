@@ -142,7 +142,8 @@ class EvidenceConfig(Config):
 class RunBudget(Config):
     # Native mode must be explicitly enabled after parser compatibility tests.
     native_tools_enabled: bool = False
-    explore_enabled: bool = False
+    # Every run lets the model look for opportunities the rules missed (capped, fact-checked).
+    explore_enabled: bool = True
     max_explore_proposals: int = Field(default=3, ge=0, le=3)
     max_explore_tool_calls: int = Field(default=3, ge=0, le=3)
     max_explore_turns: int = Field(default=4, ge=1, le=4)

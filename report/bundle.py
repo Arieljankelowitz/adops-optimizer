@@ -2,8 +2,9 @@
 
 A finished run is a ``RunOutcome``. ``assemble`` renders it, serializes the
 bundle files named in the plan (``quality.json``, ``facts.json`` ...,
-``report.md``, ``render_audit.json``) and records each file's SHA-256 in the
-manifest. ``read_bundle`` verifies those hashes before trusting a saved run,
+``report.md``, ``report.html``, ``render_audit.json``) and records each file's
+SHA-256 in the manifest. ``report.md`` and ``report.html`` are the short
+hand-in report; ``full_report.md`` is the long audit-trail rendering. ``read_bundle`` verifies those hashes before trusting a saved run,
 so an edited or mixed-up bundle is refused rather than displayed.
 
 Bundles contain private derived data. They are written only to a directory
@@ -52,6 +53,7 @@ from contracts.runtime import (
     ValidatedRun,
 )
 from report.render import audit_report, render_report
+from report.summary import ShortReport, audit_summary, render_summary
 
 MANIFEST_NAME = "manifest.json"
 # Every file except the manifest, in the order they are written.
@@ -66,6 +68,9 @@ BUNDLE_FILES = (
     "validation.json",
     "report.json",
     "report.md",
+    "report.html",
+    "full_report.json",
+    "full_report.md",
     "render_audit.json",
 )
 
@@ -120,7 +125,10 @@ class RunBundle(_File):
     candidates: CandidatesFile
     analyses: list[CandidateAnalysis]
     validation: ValidationFile
+    # The short report (Markdown with its audit map, and HTML) and the long audit rendering.
     report: RenderedReport
+    html: str
+    full_report: RenderedReport
 
 
 @dataclass(frozen=True)
@@ -129,7 +137,10 @@ class RunOutcome:
 
     artifact: RunArtifact
     run: ValidatedRun
+    # Short hand-in report (``report.md`` / ``report.html``) and the long audit rendering.
     report: RenderedReport
+    html: str
+    full_report: RenderedReport
     events: tuple[ProgressEvent, ...]
     # Present only for a run computed in this process; drill-down tools need it.
     metrics: MetricsStore | None = None
@@ -152,10 +163,11 @@ def _sha256(text: str) -> str:
 
 
 def _files(
-    run: ValidatedRun, report: RenderedReport, events: Iterable[ProgressEvent]
+    run: ValidatedRun, short: ShortReport, full: RenderedReport, events: Iterable[ProgressEvent]
 ) -> dict[str, str]:
     b = run.bundle
-    audit = audit_report(report, run)
+    full_audit = audit_report(full, run)
+    short_audit = audit_summary(short, run)
     return {
         "run.json": _dump(RunFile(status=run.status, config=run.config, events=list(events))),
         "quality.json": _dump(b.quality),
@@ -175,10 +187,15 @@ def _files(
             failures=[ValidationFailure(key=k, errors=list(v))
                       for k, v in sorted(run.validation_failures.items())],
         )),
-        "report.json": _dump(report),
-        "report.md": report.markdown,
+        "report.json": _dump(short.report),
+        "report.md": short.report.markdown,
+        "report.html": short.html,
+        "full_report.json": _dump(full),
+        "full_report.md": full.markdown,
         "render_audit.json": _dump(RenderAuditFile(
-            spans=report.spans, uncovered=list(audit.uncovered), unresolved=list(audit.unresolved)
+            spans=short.report.spans,
+            uncovered=[*short_audit.uncovered, *full_audit.uncovered],
+            unresolved=[*short_audit.unresolved, *full_audit.unresolved],
         )),
     }
 
@@ -195,8 +212,9 @@ def assemble(
     report rendered before sealing is identical to one rendered after.
     """
     events = tuple(events)
-    report = renderer(run)
-    files = _files(run, report, events)
+    full = renderer(run)
+    short = render_summary(run)
+    files = _files(run, short, full, events)
     manifest = run.manifest.model_copy(update={"files": {k: _sha256(v) for k, v in files.items()}})
     run = replace(run, manifest=manifest)
     artifact = RunArtifact(
@@ -207,7 +225,8 @@ def assemble(
         ranking=run.ranking,
         private_artifact_names=[MANIFEST_NAME, *BUNDLE_FILES],
     )
-    return RunOutcome(artifact=artifact, run=run, report=report, events=events, metrics=metrics)
+    return RunOutcome(artifact=artifact, run=run, report=short.report, html=short.html,
+                      full_report=full, events=events, metrics=metrics)
 
 
 def bundle_files(outcome: RunOutcome) -> dict[str, str]:
@@ -216,7 +235,8 @@ def bundle_files(outcome: RunOutcome) -> dict[str, str]:
     The manifest's file table is recomputed so a relabelled (cached) outcome
     still yields a self-consistent bundle; its identity fields are unchanged.
     """
-    files = _files(outcome.run, outcome.report, outcome.events)
+    files = _files(outcome.run, ShortReport(outcome.report, outcome.html), outcome.full_report,
+                   outcome.events)
     manifest = outcome.run.manifest.model_copy(
         update={"files": {k: _sha256(v) for k, v in files.items()}}
     )
@@ -267,6 +287,8 @@ def _from_files(files: Mapping[str, str]) -> RunBundle:
         analyses=[CandidateAnalysis.model_validate(x) for x in json.loads(files["analyses.json"])],
         validation=ValidationFile.model_validate_json(files["validation.json"]),
         report=RenderedReport.model_validate_json(files["report.json"]),
+        html=files["report.html"],
+        full_report=RenderedReport.model_validate_json(files["full_report.json"]),
     )
 
 
@@ -328,7 +350,8 @@ def from_bundle(bundle: RunBundle) -> RunOutcome:
         private_artifact_names=[MANIFEST_NAME, *BUNDLE_FILES],
     )
     return RunOutcome(
-        artifact=artifact, run=run, report=bundle.report, events=tuple(bundle.run.events)
+        artifact=artifact, run=run, report=bundle.report, html=bundle.html,
+        full_report=bundle.full_report, events=tuple(bundle.run.events)
     )
 
 
@@ -339,6 +362,7 @@ def as_cached(outcome: RunOutcome) -> RunOutcome:
     identity, is unchanged; only the status and its banner change.
     """
     run = replace(outcome.run, status=RunStatus.CACHED_PREVIOUS)
-    report = render_report(run)
+    short = render_summary(run)
     artifact = outcome.artifact.model_copy(update={"status": RunStatus.CACHED_PREVIOUS})
-    return replace(outcome, artifact=artifact, run=run, report=report)
+    return replace(outcome, artifact=artifact, run=run, report=short.report, html=short.html,
+                   full_report=render_report(run))

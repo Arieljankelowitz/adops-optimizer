@@ -1,10 +1,12 @@
 """Thin command-line entry point for reproducible and batch runs.
 
-    uv run python cli.py run INPUT.csv [--out PRIVATE_DIR] [--model-profile ID]
-    uv run python cli.py demo [--out PRIVATE_DIR]
+    uv run python cli.py run INPUT.csv [--out PRIVATE_DIR] [--html FILE] [--model-profile ID]
+    uv run python cli.py demo [--out PRIVATE_DIR] [--html FILE]
     uv run python cli.py show RUN_DIR
 
-``run`` executes the pipeline and prints the report; ``demo`` prints the
+``run`` executes the pipeline and prints the short report (Markdown);
+``--html`` also writes it as one self-contained HTML page, and ``--out`` writes
+the run bundle, which includes ``report.html``. ``demo`` prints the
 synthetic cached run; ``show`` re-renders a saved bundle as a previous run
 after verifying its file hashes. Bundles are written only with an explicit
 ``--out``; nothing is saved by default. Progress goes to stderr as stage
@@ -32,8 +34,12 @@ def _progress(event: ProgressEvent) -> None:
           file=sys.stderr)
 
 
-def _finish(outcome: RunOutcome, out: Path | None) -> int:
+def _finish(outcome: RunOutcome, out: Path | None, html: Path | None = None) -> int:
     print(outcome.report.markdown)
+    if html is not None:
+        html.write_text(outcome.html, encoding="utf-8")
+        print(f"Report page written to {html}. It contains derived private data.",
+              file=sys.stderr)
     if out is not None:
         target = write_bundle(outcome, out)
         print(f"Private run bundle written to {target}. It contains derived private data.",
@@ -47,15 +53,17 @@ def main(argv: list[str] | None = None) -> int:
     run_p = sub.add_parser("run", help="analyse a CSV export")
     run_p.add_argument("input", type=Path)
     run_p.add_argument("--out", type=Path, help="private directory for the run bundle")
+    run_p.add_argument("--html", type=Path, help="also write the report as one HTML file")
     run_p.add_argument("--model-profile", help="model profile ID; omit for deterministic only")
     demo_p = sub.add_parser("demo", help="print the synthetic cached demo run")
     demo_p.add_argument("--out", type=Path, help="private directory for the run bundle")
+    demo_p.add_argument("--html", type=Path, help="also write the report as one HTML file")
     show_p = sub.add_parser("show", help="re-render a saved run bundle as a previous run")
     show_p.add_argument("run_dir", type=Path)
     args = parser.parse_args(argv)
 
     if args.command == "demo":
-        return _finish(load_demo_run(), args.out)
+        return _finish(load_demo_run(), args.out, args.html)
     if args.command == "show":
         try:
             outcome = as_cached(read_bundle(args.run_dir))
@@ -78,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     except PipelineError as exc:
         print(f"Run stopped at {exc.stage.value}: {exc.public_message}", file=sys.stderr)
         return EXIT_RUN_FAILED
-    return _finish(outcome, args.out)
+    return _finish(outcome, args.out, args.html)
 
 
 if __name__ == "__main__":
