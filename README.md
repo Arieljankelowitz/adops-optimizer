@@ -1,437 +1,86 @@
 # adops-optimizer
 
-A tool that takes a daily ad-performance CSV export, measures it with
-deterministic Python, asks a self-hosted open-weight LLM to judge and explain
-the opportunities it finds, and produces a short optimization report of
-controlled tests and investigations.
+Turn a daily ad-performance CSV into a short HTML optimization report:
+**data in → Python measures → AI judges and explores → fact-checked report.**
 
-Python measures; the model evaluates and explains by referencing typed
-evidence; code validates every reference and renders every number.
+Python computes the metrics and possible opportunities. A self-hosted open-weight
+LLM decides which deserve attention, asks for drill-downs, and recommends tests.
+Code checks its evidence and renders the numbers. The output is a decision aid,
+not proof that a change will increase profit.
 
-Bring your own CSV export. Raw data, derived reports and recordings are never
-committed to this repository; only independently generated synthetic data is.
+## Quick start
 
-## Status
-
-| Part | State |
-|---|---|
-| Contracts, IDs, schemas, synthetic CSV generator | done |
-| Strict CSV loader and data-quality rules DQ01–DQ20 | done |
-| Self-hosted model deployment (`deploy/`), profiles and fail-closed client | done; see [`deploy/README.md`](deploy/README.md) |
-| Aggregation, all eight detector families and conditional scenarios | done |
-| Report renderer, run bundle, runner, CLI, Streamlit app | done, against synthetic run fixtures |
-| Evidence builder and strict reference/role validator | done; synthetic/adversarial tests, no model required |
-| Prompts, analysis, tools and ranking | implemented; offline mock-client acceptance, pending live acceptance |
-
-The app's **cached demo run** and the CLI's `demo` command show the complete flow
-on a synthetic run without inference. A run without a model
-profile now completes quality checks, analytics, evidence and rendering as an
-explicitly labelled **deterministic-only** diagnostic report.
-
-Analytics (`pipeline/metrics.py`, `detectors.py`, `scenarios.py`): observed
-groups only, rates as ratios of sums with null-with-reason denominators,
-eligibility gates with 0.5x/2x sensitivity and a stability gate, candidates
-with daily, peer, coverage, concentration and contrary evidence plus an
-overlap graph, and code-only conditional scenarios. Thresholds are versioned
-defaults in `AnalyticsConfig` and `DetectorConfig`.
-
-Evidence reuses detector facts and promotes quality facts without changing their
-IDs. Registries snapshot nested containers and extend by returning a new registry.
-`pipeline.evidence.serialize_pack(pack)` is the compact model-facing JSON view;
-full provenance stays in the private bundle. Packs retain all applicable warnings,
-triggers, counter-evidence and scenario dependencies. Only redundant daily/peer
-rows may be trimmed. Default limits are fifteen candidates, 40,960 UTF-8 bytes per
-pack and a 10,240-token pack budget; irreducible oversized packs fail closed.
-`build_evidence(..., count_tokens=deployed_tokenizer)` enforces the token limit.
-Without that callback only the byte limit is checked: a model orchestrator must
-count the complete prompt with the deployed tokenizer before any request, including
-instructions/tools and the profile's output/context reserve. Bytes are not tokens.
-
-The validator reparses strict reference-only IR, checks scope/cohort/period,
-metric/unit/lineage/direction, quality gates, labelled approved assumptions and
-code-recomputed conditional scenarios. Ranking resolves only previously validated
-recommendations; unproven unions and duplicate impacts are refused. Optional
-`validate_rendered_report` audits exact sourced value spans and source roles;
-the renderer also runs its warning/metadata audit. Neither validates causality.
-
-## Architecture
-
-```text
-CSV bytes (in memory; SHA-256 before parsing)
-  -> schema + load + data-quality assessment            pipeline/load.py, quality.py
-  -> additive totals, daily series, observed groups     pipeline/metrics.py
-  -> all detector families + sensitivity views          pipeline/detectors.py
-  -> refined quality, overlap-aware candidate selection pipeline/quality.py
-  -> immutable typed evidence + conditional scenarios   pipeline/evidence.py, scenarios.py
-  -> self-hosted model: one analysis per candidate,     llm/analysis.py, tools.py
-     bounded drill-down tools
-  -> strict validation, at most one repair              llm/validator.py
-  -> model ranking/merge + summary themes, validated    llm/ranking.py
-  -> code-rendered short report (HTML + Markdown),      report/summary.py, render.py
-     long audit rendering, both with audit maps
-  -> private run bundle, Streamlit drill-down, download report/bundle.py, app.py
-```
-
-`runner.py` runs these stages in order, emitting a progress event per stage
-and per candidate; `app.py` and `cli.py` are thin front ends over it.
-
-| Python | Model | Validator and renderer |
-|---|---|---|
-| Schema, data traps, metric definitions, materiality | Which candidates deserve attention, which are weak | Every ID resolves in the current run namespace |
-| Every quantity, comparison and scenario | Which evidence, test template and codes apply | Metric, unit, segment, period and role match |
-| Every detector over every observed group | Counter-evidence, rejection, merging | Assumptions within approved bounds |
-| Overlap and double-counting | Priority and qualitative explanation codes | Every number in the report is rendered from a typed object |
-
-No raw rows reach the model. Segment labels are treated as untrusted data and
-escaped wherever they are displayed.
-
-## Input and metrics
-
-The export has 17 columns: `Day, Supply ID, Country, Size, Placement Type,
-Device Type, Demand Requests, Demand Responses, Our Bidfloor, Demand Bidprice,
-Demand sRPM $, Demand Wins, Supply Impressions, Revenue, Cost, Demand eCPM,
-Profit $`. Rows are daily aggregates, not auction-level data, so the tool
-recommends controlled tests and investigations, never proven fixes.
-
-- Counters and money are additive; prices and rates are not. Every rate is a
-  ratio of sums and weighted by traffic, never an average of row rates.
-- Exported sRPM is revenue per **million** requests, verified per file.
-- Money is "export dollars": the currency code is not supplied, so none is
-  asserted and nothing is converted.
-- Reported profit is preserved; revenue minus cost is reconciled separately
-  within declared cent-rounding bounds.
-- A zero denominator gives an undefined value with a reason, never zero.
-
-## Data-quality warnings
-
-Twenty versioned rules (DQ01–DQ20) cover parsing and schema, unknown labels,
-duplicate grain, counter validity, money without traffic, partial days,
-intermittent coverage, one- or two-day concentration, spikes, placeholder
-countries and sizes, profit reconciliation, sRPM and eCPM units, row versus
-traffic weighting, request granularity, bid/floor semantics, signed
-adjustments, threshold sensitivity and causal limits. Thresholds are defaults
-in `contracts/config.py` and part of the configuration hash.
-
-```python
-from contracts.config import InputConfig, QualityConfig
-from pipeline.load import load_csv
-from pipeline.quality import assess_quality, render_message
-
-with open("export.csv", "rb") as source:
-    data = load_csv(source, InputConfig())
-report = assess_quality(data, QualityConfig())
-facts = {f.fact_id: f for f in report.facts}
-for issue in report.issues:
-    print(issue.severity, render_message(issue, facts))
-```
-
-- `load_csv` hashes the bytes, enforces size and row bounds, requires the 17
-  header names (extra columns are ignored and reported), parses dates
-  strictly, keeps Supply ID as an opaque string and keeps numbers as exact
-  decimals. A cell it cannot parse becomes `None` and is recorded in
-  `parse_audit`; nothing is coerced to zero and no row is dropped.
-- `assess_quality` runs the first pass (file, schema, counters, money,
-  rates, account-day coverage). `refine_quality` adds candidate coverage,
-  concentration, spike, materiality and peer checks once candidates exist; it
-  only appends.
-- Each issue carries a severity, inference restrictions and fact references;
-  its message is rendered by `render_message` from those facts, and the report
-  shows that message as one audited span.
-
-Warnings are the **first** section of every report and the first thing the app
-shows. A fatal issue blocks model recommendations; the report then contains
-the quality findings and a diagnostic summary only. Rules that cannot be
-tested on a file are reported as "not testable", never as passed.
-
-## The report
-
-The primary output is a short, self-contained `report.html` (and a matching
-`report.md`) built by `report/summary.py`: a one-line account summary
-(requests, revenue, profit, margin), at most three data-quality caveats that
-actually affect the conclusions, then five to ten ranked recommendation cards
-and two simple charts (each slice against its baseline; requests and revenue by
-slice). Each card has the assignment's shape:
-
-- **Opportunity**: the slice in plain words (Supply ID / country / size /
-  placement / device), with its **current requests, revenue and profit**
-- **Observation**: the data behind it (value against the account or matched
-  peers, trend, coverage), each value hoverable for its fact ID
-- **Recommendation**: a plain verb (scale up, throttle, raise or lower floor,
-  review margin terms, reconcile counters, investigate) and the concrete test,
-  with allocation, duration and stop-loss
-- **Estimated opportunity**: dollars, labelled as an estimate with its key
-  assumption in one clause, or "not estimable from this export"
-
-Findings the model proposed while exploring, rather than a detector rule,
-carry a **found by AI** badge. What the data does not prove, test design,
-guardrails, assumptions, fact IDs and run metadata sit behind a collapsed
-**Details** per card and an appendix. The long, fixed test-form rendering
-(`report/render.py`) is kept as `full_report.md` in the run bundle.
-
-Every value is written through one formatter and carries the ID of the
-registry object it came from (a span in Markdown, a `data-src` attribute in
-HTML). `audit_summary` requires every digit in both outputs to sit inside such
-a value whose source resolves in the run, and replays the renderer to require
-identical text; `render_summary` refuses to return a report that fails. Static
-wording in `report/text.py` contains no digits, which a test enforces. The
-model never writes report text or numbers.
-
-Run statuses are unmistakable in the header and the app banner:
-`final`, `partial` (some candidates or the ranking did not validate),
-`deterministic_only` (no model output; a diagnostic draft), `failed` and
-`cached_previous`. A sample report rendered from the synthetic run is in
-[`examples/synthetic/demo_report.html`](examples/synthetic/demo_report.html)
-and [`demo_report.md`](examples/synthetic/demo_report.md).
-
-## Detectors, tools and scenarios
-
-Eight detector families produce candidates, not conclusions: scale winners,
-wasted requests, margin leaks, high and low bid/floor investigations, wins
-versus impressions discrepancies, daily trends and combination outliers.
-Overlapping parent/child candidates are grouped so impacts are never summed.
-
-Three deterministic drill-down tools (`breakdown`, `daily_trend`,
-`compare_to_peers`) are available to the model, at most three calls per
-candidate, and in the app's Drill-down tab. Truncated breakdowns keep an
-"other" bucket so coverage stays complete. Daily tools distinguish absent
-observations from observed zero; peer definitions retain fixed matching keys
-(including placement) and exclude the target. Tool facts are promoted into the
-same immutable namespace before validation or rendering. Repeated calls are
-cached only within that namespace.
-
-### Bounded model reasoning
-
-`llm/prompts.py` versions a reference-only system contract. Labels and tool
-results are untrusted JSON data, never instructions; the model selects typed
-observations and reviewed codes, not numerical prose. No raw rows enter prompts.
-`llm/analysis.py` judges at most 15 rule candidates, with at most four turns,
-three tool executions and one shared schema/grounding repair each. Transport
-retries remain exclusively in `llm/client.py`: authentication and safety failures
-are not retried. The last turn and every repair require a final answer, not tools.
-
-The default parser-independent loop returns `NextStep` (`call_tool` or `final`).
-`RunConfig.budget.native_tools_enabled` is **false** until the exact deployed
-parser passes compatibility tests. Native mode uses the same schema-constrained,
-non-thinking client and typed handlers; a refused/invalid native protocol switches
-to the JSON loop within the existing turn budget. Neither mode executes arbitrary
-Python, SQL, shell commands, network requests or filesystem operations.
-
-After rule judgments, `RunConfig.budget.explore_enabled` enables a
-separate discovery stage (default **true**; set it false to skip): at most four discovery turns, three
-tool executions and three proposals. `max_explore_proposals` can lower that cap.
-Proposals must reference facts actually returned by discovery tools, not merely
-IDs seen in a prompt. They are labelled **model-proposed (not detector-raised)**
-in contracts, the candidate table and the report. They receive the ordinary
-judgment loop and the same strict validator, with no exemptions. No new numeric
-assumptions/scenarios are minted. Optional exploration failure never blocks the
-rule results; unknown impact and an investigation-first outcome are appropriate.
-
-`llm/ranking.py` receives canonically ordered validated recommendations, selects
-up to ten, and allows one repair. It checks namespace, references, duplicates,
-summary grounding and overlapping scopes. Merges require identical scopes and
-all source evidence/caveats already present in the validated target; wider unions
-fail closed. Unselected recommendations remain in the audit trail. Stable input
-ordering/tie-breaks do not make model judgments deterministic.
-
-The ordinary ceiling is **77 generations**; enabled exploration adds at most
-**19**, for **96**. Independently, the client enforces 100 network attempts,
-30 minutes warm wall time, 180 seconds per request and a separate 600-second
-readiness allowance. Profile prompt/output bounds remain authoritative (primary
-12,288/2,048; smaller profile 6,144/1,024). A deployed tokenizer can supply
-`client.count_prompt_tokens(messages, tools)`; without it, a conservative UTF-8
-byte upper bound refuses oversized prompts rather than dropping warnings,
-units or counter-evidence. This may reject packs that a tokenizer could fit;
-exact-tokenizer/max-pack live acceptance remains required. Counts and incomplete
-candidate IDs are recorded in the private manifest. Exhaustion yields a partial
-run, never an invented successful ranking.
-
-Conditional scenarios (additional eligible requests, throttle, margin
-sensitivity, rendering sensitivity) are computed by code from historical facts
-and labelled test assumptions, over the observed period, with displaced
-profit and revenue/profit at risk stated. Floor changes get no forecast from
-daily averages.
-
-## Model and serving
-
-The default profile is the official FP8 checkpoint of `Qwen/Qwen3.8-27B-FP8`
-(Apache-2.0) on one L40S through a self-built vLLM server, with thinking
-disabled on every call, a bounded 16K context and JSON-schema-constrained
-output. FP8 is chosen because BF16 weights alone exceed one 48GB L40S; the
-bounded context trades long packs for fit and cost. No task-specific model
-ranking is claimed from publisher benchmarks. A lower-change contingency and a
-cheaper fallback live in the same profile file and must pass the same
-acceptance tests; a fallback is never substituted silently.
-
-Every model setting (immutable revision, vLLM and transformers pins, context
-and output bounds, parsers) lives in `config/model_profiles.yaml`, loaded by
-`llm/profiles.py`; the image digest stays unresolved until the acceptance
-tests pass. `deploy/modal_vllm.py` serves the active profile with vLLM behind
-a bearer-key check; [`deploy/README.md`](deploy/README.md) covers setup,
-serving, cold starts (scale to zero after five idle minutes, three to five
-minutes to wake) and stopping. A profile's SHA-256 goes into the run manifest
-and cache key, and its model ID and revision into the report header.
-
-`llm/client.py` talks to the endpoint over HTTPS. `LLM_BASE_URL`,
-`LLM_API_KEY` and `LLM_ALLOWED_BASE_URLS` are required; the client refuses
-missing configuration, non-allowlisted or plain-HTTP endpoints, embedded
-credentials and known hosted model APIs, and there is no hosted-API
-fallback. It polls readiness with backoff before the first request, which the
-app shows as the cold-start stage. Credentials stay in local environment or the deployment's secret
-store and are never sent to the browser. If the endpoint or model layer is
-unavailable, the run becomes an explicitly labelled `deterministic_only`
-draft.
-
-## Cost and authorization
-
-Deployment and spending need separate authorization; nothing in this
-repository starts a GPU on its own. Modal pricing checked on 21 October 2026:
-one L40S at about $1.95/hour of GPU time, roughly $2–2.70/hour with host CPU
-and memory while a container runs.
-Loading, compilation, retries and warm idle are billable; cached weights do
-not make cold starts free. The serving plan is one replica, no warm minimum,
-one concurrent generation and a five-minute idle scaledown. Provider credits may
-cover usage but are not a guaranteed $0 cost, and an app-side counter is not
-a provider-enforced spending cap.
-
-## Running it
-
-Requires [uv](https://docs.astral.sh/uv/); Python 3.12 is selected from
-`.python-version` and dependencies are pinned in `uv.lock`.
+Requires `uv` and Python 3.12 (selected by `.python-version`). From the repository root:
 
 ```sh
-uv sync
-uv run pytest                      # no network, no model, synthetic data only
-uv run streamlit run app.py        # local app
-uv run python cli.py demo          # print the synthetic cached run
-uv run python cli.py run INPUT.csv [--model-profile ID] [--out PRIVATE_DIR] [--html FILE]
-uv run python scripts/wake_model.py # wake the endpoint before a live run
-uv run python cli.py show PRIVATE_DIR/run_<id>
+uv sync --frozen
+uv run streamlit run app.py
 ```
 
-In the app, choose **Upload a CSV**, the **Synthetic sample CSV** or the
-**Cached demo run (synthetic)** in the sidebar, run the analysis (live stage
-progress is shown while it runs), and read the short report on the **Report**
-tab with its HTML and Markdown downloads. A secondary **Details** tab holds the
-data-quality findings, data summary, sortable metrics, candidates with daily
-charts, progress, drill-downs, validation with a fact inspector, and the full
-audit report. Test assumptions are edited in the sidebar within approved
-bounds; an edit creates a new run namespace and cache key. A run can be
-cancelled: no new stage or model call starts, but an in-flight call is not
-interrupted and may still be billed.
+In the sidebar, choose **Synthetic sample CSV**, leave **Model profile** at
+**None: deterministic analytics only**, then click **Run analysis**. This runs
+fresh Python analytics without inference and produces a labelled diagnostic draft.
+Choose **Cached demo run (synthetic)** to inspect a complete example report
+without a model call; it is a saved fixture, not fresh AI analysis.
 
-Live tests are deselected by default; run them explicitly with
-`uv run pytest -m live` once an endpoint is configured (see `.env.example`
-and `deploy/README.md`).
-Set `PRIVATE_INPUT_DIR` and `PRIVATE_RUN_DIR` to directories outside this
-repository for private inputs and run bundles.
-
-## Caching, privacy and retention
-
-- A cached result is reused only when the complete key matches:
-  `(input_sha256, schema_version, analytics_config_hash, model_profile_hash,
-  prompt_hash, tool_version, assumption_hash)`. A different file, config,
-  profile, prompt, tool version or assumption never reuses a result.
-- The cache is per browser session and in memory only. The app uses no global
-  Streamlit cache; uploads and reports never leave the session unless you
-  download them.
-- A cached result is labelled **CACHED PREVIOUS RUN — not fresh inference**
-  on screen and in the report header, with its original generation time,
-  input hash, model ID and revision and config hash. Re-rendering does not
-  change the generation time. Without a matching cache, the app offers
-  deterministic diagnostics or the synthetic demo; it never shows another
-  file's report.
-- Downloads appear only after acknowledging that they contain private derived
-  data. The CLI writes a run bundle only with an explicit `--out`.
-- A run bundle (`manifest.json`, `run.json`, `quality.json`, `facts.json`,
-  `assumptions.json`, `scenarios.json`, `candidates.json`, `analyses.json`,
-  `validation.json`, `report.json`, `report.md`, `report.html`,
-  `full_report.json`, `full_report.md`, `render_audit.json`) records
-  each file's SHA-256 in the manifest; an edited or incomplete bundle is
-  refused when loaded. The source path is never recorded.
-- Errors shown in the app or CLI carry stage-level messages only, never
-  labels, keys or raw exception text. Streamlit usage statistics are disabled
-  in `.streamlit/config.toml`.
-- The real-data report and the demo recording are delivered privately, not
-  through this repository.
-
-## Evaluation
-
-The synthetic generator plants known traps (partial final day, two-day revenue
-spike, placeholder labels, counter violations, request granularity, profit
-rounding, cent-rounded zero revenue, loss-making and intermittent slices) and
-writes their labels to `<name>.traps.json`. Detector precision/recall against
-those labels and validator rejection counts are reported once the pipeline and
-model lanes are integrated. Each run's manifest records input, configuration,
-profile, prompt and tool hashes so a report can be reproduced as an artifact;
-a repeated model run may still rank differently.
-
-The offline reasoning mini-eval includes 24 independently constructed synthetic
-packs across every detector family, scripted weak-pattern rejections, and
-adversarial labels. Additional tests cover native and fallback tool round trips,
-truncation/residual totals, missing versus zero days, scope/namespace isolation,
-malformed/null output, finite repair budgets, ranking caveats and explore caps
-and provenance. These mocked tests assess protocol/safety behavior, **not** real
-model recommendation quality, causal validity or serving compatibility. No live
-model requests or cloud spending are part of the normal test suite.
-
-Known limits: daily aggregates cannot show causation, auction-level floor
-effects, hourly completeness, request-processing costs or alternative demand;
-the export has no partner dimension.
-
-## Demo video outline
-
-1. The problem and the split: Python measures, the model evaluates, code
-   validates.
-2. Architecture, the selected FP8 model and proof of the authenticated
-   self-hosted endpoint, without secrets.
-3. Upload, quality warnings, aggregates, candidate analysis with a tool call,
-   validation and the report, stating whether the endpoint was warm.
-4. Two or three recommendations: observations with fact IDs, contrary
-   evidence, the controlled test, separate assumptions and conditional impact.
-5. A validator rejection (wrong segment, unit or stale fact).
-6. Download, the cached-run banner with exact-input matching, then limits and
-   costs.
-
-The real-data recording is private; any public demo uses synthetic data.
-
-## Future work
-
-Deeper model comparison on task-specific evidence packs, auction-level and
-floor-loss evidence, variance-aware experiment sizing, scheduled runs,
-multi-partner comparison and an optional fast triage step.
-
-## Layout
-
-```text
-contracts/          shared data contracts (pydantic v2), IDs, templates, JSON Schemas
-pipeline/           load, quality, metrics, detectors, scenarios, evidence (implemented);
-                    scope.py shared segment/period IDs
-llm/                client, profiles, validator, prompts, analysis, tools,
-                    ranking (implemented)
-report/
-  summary.py        short hand-in report: Markdown and HTML from one audited form
-  render.py         long fixed-form Markdown renderer and post-render audit
-  text.py           reviewed wording (no digits)
-  bundle.py         private run bundle: assemble, hash, write, verify, relabel as cached
-runner.py           stage orchestration, progress, cancel, jobs, cache key, session cache
-cli.py, app.py      command line and Streamlit front ends
-deploy/             self-hosted vLLM serving on Modal
-config/             run configuration files; model_profiles.yaml holds every model setting
-scripts/
-  generate_synthetic.py   seeded synthetic export with planted traps
-  build_demo_run.py       synthetic run fixture for the demo and tests
-  wake_model.py           wake the self-hosted endpoint before a demo
-  export_contracts.py     regenerates contracts/schemas and contract examples
-examples/synthetic/ synthetic contract examples, demo run bundle and report
-tests/              contracts, unit, integration (incl. Streamlit AppTest), live (opt-in)
-```
-
-After changing a contract model, regenerate schemas and examples with
-`uv run python scripts/export_contracts.py`; after changing the renderer or
-the demo run, regenerate the fixture with
-`uv run python scripts/build_demo_run.py`.
+### Command line: no model needed
 
 ```sh
-uv run python scripts/generate_synthetic.py            # rewrites tests/fixtures/synthetic/
-uv run python scripts/generate_synthetic.py --seed 7 --out /tmp/other.csv
+uv run python cli.py run tests/fixtures/synthetic/ad_performance.csv --html /tmp/adops-diagnostic.html
+uv run python cli.py demo --html /tmp/adops-demo.html
 ```
+
+Open the resulting HTML file in a browser. Markdown also prints to the terminal.
+For a full run bundle, add `--out /tmp/adops-runs`; the report lands at
+`/tmp/adops-runs/run_<id>/report.html`, alongside Markdown and audit artifacts.
+Without `--html` or `--out`, the CLI saves nothing. In Streamlit, the **Report**
+tab offers HTML and Markdown downloads after the privacy acknowledgement.
+
+### With the self-hosted model
+
+Configure an existing endpoint following [deployment instructions](deploy/README.md).
+Export `LLM_BASE_URL` (ending in `/v1`), `LLM_API_KEY` and
+`LLM_ALLOWED_BASE_URLS` (including that exact base URL) into the launching shell;
+the app does not automatically load `.env`.
+
+```sh
+uv run python cli.py run tests/fixtures/synthetic/ad_performance.csv --model-profile qwen38_fp8_l40s_v1 --html /tmp/adops-model.html
+```
+
+Alternatively, select `qwen38_fp8_l40s_v1` in Streamlit before running the sample.
+This uses billable inference when configured. If the model is unavailable, the
+report is labelled **deterministic-only**; incomplete model analysis is labelled
+**partial**, never silently presented as complete. The offline quick starts need
+no credentials. Live model quality and serving acceptance require separate testing.
+
+## Read more
+
+- [Architecture](docs/ARCHITECTURE.md): the four-stage flow and its limits.
+- [Model](docs/MODEL.md): selection, self-hosting and application protocol.
+- [Video / live-demo outline](docs/VIDEO_SCRIPT.md): a short synthetic walkthrough.
+- [Deployment](deploy/README.md): setup, latency, cost and stopping the endpoint.
+- [Example report](examples/synthetic/demo_report.html) and [Markdown version](examples/synthetic/demo_report.md).
+
+## Results on the provided dataset
+
+**Placeholder — results are delivered separately with the hand-in.**
+The real-data report is private and must not be committed to this repository.
+
+## Privacy and limits
+
+Only independently generated synthetic data belongs here. Keep private CSVs,
+reports, run bundles and recordings outside the repository. Raw rows are not sent
+to the model; computed evidence includes segment labels, so treat the endpoint
+and its credentials as private too.
+
+Daily aggregates support investigations and controlled tests, not causal claims
+or reliable floor-change forecasts. The tool does not change ad-serving settings.
+
+## Offline tests
+
+```sh
+uv run pytest
+```
+
+The normal suite uses synthetic data and mocks; live tests are excluded by default.
+It verifies software behavior, not recommendation quality from the deployed model.
