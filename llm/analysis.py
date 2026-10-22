@@ -16,6 +16,7 @@ from contracts.enums import (
     MetricKey,
     NextStepKind,
     ToolName,
+    ValidationErrorCode,
     ValidityStatus,
 )
 from contracts.ids import IdPrefix, canonical_json, make_id
@@ -31,6 +32,7 @@ from contracts.models import (
     NextStep,
     RejectedAttempt,
     ToolCall,
+    ValidationIssue,
 )
 from contracts.runtime import (
     ChatMessage,
@@ -51,12 +53,13 @@ from llm.answer import (
     explore_schema,
     final_schema,
     output_issues,
+    peer_segments,
     repair_errors,
     step_schema,
 )
 from llm.prompts import EXPLORE_PROMPT, build_candidate_messages, tool_view
 from llm.tokens import estimate_prompt_tokens
-from llm.tools import extend_bundle, peer_definition
+from llm.tools import ToolRefusedError, extend_bundle, peer_definition
 from pipeline.evidence import (
     answer_guide,
     issue_fact_ids,
@@ -259,13 +262,14 @@ def analyze_candidate(
     tool_cap = min(budget.max_tool_calls_per_candidate, 3)
 
     def scopes():
-        segments = {s.segment_id for s in pack.segments} | {
-            f.segment.segment_id for f in known.values()
+        """Segment IDs, period IDs and the segments with matched peers in scope."""
+        segments = {s.segment_id: s for s in pack.segments} | {
+            f.segment.segment_id: f.segment for f in known.values()
         }
         periods = {p.period_id for p in pack.periods} | {
             f.period.period_id for f in known.values()
         }
-        return segments, periods
+        return set(segments), periods, peer_segments(segments.values())
 
     def result(status, rec=None, reason=None):
         if status is not AnalysisStatus.COMPLETE:
@@ -334,6 +338,7 @@ def analyze_candidate(
             )
         )
         try:
+            segment_ids, period_ids, peer_ids = scopes()
             response = generate(
                 client,
                 budget,
@@ -347,7 +352,14 @@ def analyze_candidate(
                 else (),
                 schema=final_schema(pack, options)
                 if final_only
-                else step_schema(pack, options, *scopes(), executions < tool_cap),
+                else step_schema(
+                    pack,
+                    options,
+                    segment_ids,
+                    period_ids,
+                    executions < tool_cap,
+                    peer_ids,
+                ),
             )
             call = native_call = None
             if response.tool_calls:
@@ -368,7 +380,7 @@ def analyze_candidate(
                     or call.tool not in tools.allowed_tools
                 ):
                     raise ValueError("tool_not_allowed")
-                allowed_segments, allowed_periods = scopes()
+                allowed_segments, allowed_periods, _ = scopes()
                 if (
                     call.segment_id not in allowed_segments
                     or call.period_id not in allowed_periods
@@ -381,7 +393,45 @@ def analyze_candidate(
                             AnalysisStatus.BUDGET_EXHAUSTED, reason=BudgetReason.TOOL_BUDGET
                         )
                     executions += 1
-                    ev = tools.dispatch(cid, call)
+                    try:
+                        ev = tools.dispatch(cid, call)
+                    except ToolRefusedError as exc:
+                        # Tell the model which call failed and why; the turn
+                        # and the execution are spent, the candidate is not.
+                        stats.invalid_outputs += 1
+                        issue = ValidationIssue(
+                            code=ValidationErrorCode.SCHEMA_INVALID,
+                            path="/tool_call",
+                            detail=f"tool refused: {exc}",
+                        )
+                        rejected.append(
+                            RejectedAttempt(attempt=turns + repairs, errors=[issue])
+                        )
+                        refusal = canonical_json(
+                            {
+                                "tool_refused": str(exc),
+                                "instruction": "That tool cannot answer for that "
+                                "scope. Choose another call or answer.",
+                            }
+                        )
+                        messages.extend(
+                            [
+                                ChatMessage(
+                                    role="assistant", content="", tool_calls=[native_call]
+                                ),
+                                ChatMessage(
+                                    role="tool",
+                                    content=refusal,
+                                    tool_call_id=native_call["id"],
+                                ),
+                            ]
+                            if native_call
+                            else [
+                                ChatMessage(role="assistant", content=response.content),
+                                ChatMessage(role="user", content=refusal),
+                            ]
+                        )
+                        continue
                     if ev.run_namespace != pack.run_namespace or ev.tool_call != call:
                         raise ValueError("tool_response_mismatch")
                     cache[key] = ev
@@ -569,6 +619,9 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                     | {f.period.period_id for f in known.values()},
                     final
                     or executions >= min(budget.max_explore_tool_calls, 3),
+                    peer_segments(
+                        [*offered_segments, *(f.segment for f in known.values())]
+                    ),
                 ),
             )
             step = ExploreStep.model_validate_json(response.content)
@@ -589,7 +642,19 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                 executions += 1
                 # Discovery has no candidate yet; runner provides a namespace-
                 # checked dispatch_explore, not a fake detector candidate ID.
-                ev = tools.dispatch_explore(call)
+                try:
+                    ev = tools.dispatch_explore(call)
+                except ToolRefusedError as exc:
+                    messages.extend(
+                        [
+                            ChatMessage(role="assistant", content=response.content),
+                            ChatMessage(
+                                role="user",
+                                content=canonical_json({"tool_refused": str(exc)}),
+                            ),
+                        ]
+                    )
+                    continue
                 if ev.tool_call != call:
                     raise ValueError("explore_tool_response_mismatch")
                 bundle = extend_bundle(bundle, ev)

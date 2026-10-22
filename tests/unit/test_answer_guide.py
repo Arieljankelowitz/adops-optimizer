@@ -505,3 +505,82 @@ def test_ranking_is_shown_exactly_the_pairs_its_check_refuses():
             assert refused == (frozenset((a.recommendation_id, b.recommendation_id)) in listed)
     ids = seen["schema"]["properties"]["ranked_recommendation_ids"]["items"]["enum"]
     assert set(ids) == {r.recommendation_id for r in recs}
+
+
+def test_a_refused_tool_call_is_reported_to_the_model_not_fatal():
+    """Live regression: 7 of 15 candidates were lost when the model asked for
+    peers of a slice that does not fix every dimension; the tool's refusal
+    ended the whole candidate as a pipeline error."""
+    events, seen = [], {}
+
+    def respond(request):
+        if request.response_schema_name == "recommendation_ranking":
+            return _rank(request)
+        evidence = _evidence(request)
+        c = evidence["candidate"]
+        last = json.loads(request.messages[-2].content)
+        if "tool_refused" in last:
+            seen["refused"], seen["candidate"] = last["tool_refused"], c["candidate_id"]
+            return _final_from_guide(request)
+        own = next(
+            s for s in evidence["untrusted_segment_labels"]
+            if s["segment_id"] == c["segment_id"]
+        )
+        if (
+            "refused" not in seen
+            and len(own["filters"]) < 5
+            and request.response_schema_name == "candidate_next_step"
+        ):
+            turn = json.loads(request.messages[-1].content)
+            seen["schema"] = request.response_schema
+            call = CompareToPeersArgs(
+                segment_id=c["segment_id"],
+                period_id=c["period_id"],
+                peer_definition_id=turn["peer_definition_ids"][0],
+            )
+            return {"kind": "call_tool", "tool_call": call.model_dump(mode="json")}
+        return _final_from_guide(request)
+
+    client = FakeClient([respond] * 40)
+    stages = replace(default_stages(), create_client=lambda env, budget, profile: client)
+    config = RunConfig(
+        model_profile_id=load_profile().profile_id,
+        budget=RunBudget(explore_enabled=False),
+    )
+    outcome = execute(
+        io.BytesIO(SAMPLE.read_bytes()), config, events.append, stages=stages, env={}
+    )
+    assert seen["refused"] == "unknown_or_unmatched_peer_definition"
+    analysis = next(a for a in outcome.run.analyses if a.candidate_id == seen["candidate"])
+    assert analysis.status is AnalysisStatus.COMPLETE
+    assert all(a.status is AnalysisStatus.COMPLETE for a in outcome.run.analyses)
+    assert len(outcome.run.recommendations) == 15
+    (attempt,) = analysis.rejected_attempts
+    assert attempt.errors[0].path == "/tool_call"
+    assert "unknown_or_unmatched_peer_definition" in attempt.errors[0].detail
+    assert [e.message_code for e in events if e.stage.value == "tool_call"] == [
+        "tool_call_started",
+        "tool_refused",
+    ]
+    # The narrowed schema would not have offered that call for this slice.
+    peers = seen["schema"]["$defs"].get("CompareToPeersArgs")
+    candidate = outcome.run.bundle.candidates[seen["candidate"]]
+    assert peers is None or candidate.segment_id not in peers["properties"]["segment_id"]["enum"]
+
+
+def test_peer_comparison_is_offered_only_for_slices_fixing_every_dimension(bundle):
+    from llm.answer import peer_segments
+
+    for pack in bundle.packs.values():
+        segments = {s.segment_id: s for s in pack.segments}
+        peers = peer_segments(segments.values())
+        schema = step_schema(
+            pack, list(pack.answer_guide.observation_options), set(segments),
+            {p.period_id for p in pack.periods}, True, peers,
+        )
+        union = schema["properties"]["tool_call"]["anyOf"][0]["oneOf"]
+        offered = "#/$defs/CompareToPeersArgs" in [r["$ref"] for r in union]
+        assert offered == bool(peers)
+        if peers:
+            enum = schema["$defs"]["CompareToPeersArgs"]["properties"]["segment_id"]["enum"]
+            assert all(len(segments[s].filters) == 5 for s in enum)

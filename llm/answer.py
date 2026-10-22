@@ -108,6 +108,7 @@ def step_schema(
     segment_ids: set[str],
     period_ids: set[str],
     tools_left: bool,
+    peer_segment_ids: set[str] = frozenset(),
 ) -> dict:
     """Schema of a tool-or-final turn: tool scopes are the ones the loop accepts."""
     schema = NextStep.model_json_schema()
@@ -115,19 +116,42 @@ def step_schema(
         return schema
     defs = schema["$defs"]
     _narrow_recommendation(defs["CandidateRecommendation"], pack, options)
-    _narrow_tools(defs, pack.run_namespace, segment_ids, period_ids)
+    _narrow_tools(schema, pack.run_namespace, segment_ids, period_ids, peer_segment_ids)
     if not tools_left:
         schema["properties"]["kind"] = {"const": "final"}
     return schema
 
 
-def _narrow_tools(defs: dict, namespace: str, segment_ids, period_ids) -> None:
+def _narrow_tools(
+    schema: dict, namespace: str, segment_ids, period_ids, peer_segment_ids
+) -> None:
+    """Tool scopes the loop accepts; peers only for slices fixing every dimension."""
+    defs = schema["$defs"]
     for model in _TOOL_ARGS:
         props = defs[model.__name__]["properties"]
         props["segment_id"] = {"enum": sorted(segment_ids)}
         props["period_id"] = {"enum": sorted(period_ids)}
-    defs[CompareToPeersArgs.__name__]["properties"]["peer_definition_id"] = {
+    peers = defs[CompareToPeersArgs.__name__]["properties"]
+    peers["peer_definition_id"] = {
         "enum": [peer_definition(namespace, d).peer_definition_id for d in Dimension]
+    }
+    if peer_segment_ids:
+        peers["segment_id"] = {"enum": sorted(peer_segment_ids)}
+        return
+    # No slice in scope has matched peers: the tool cannot be called at all.
+    union = schema["properties"]["tool_call"]["anyOf"][0]
+    ref = f"#/$defs/{CompareToPeersArgs.__name__}"
+    union["oneOf"] = [r for r in union["oneOf"] if r["$ref"] != ref]
+    union.get("discriminator", {}).get("mapping", {}).pop("compare_to_peers", None)
+    del defs[CompareToPeersArgs.__name__]
+
+
+def peer_segments(segments) -> set[str]:
+    """Slices ``compare_to_peers`` can answer: every dimension fixed, full input."""
+    return {
+        s.segment_id
+        for s in segments
+        if s.cohort_id == "full_input" and all(d in s.filters for d in Dimension)
     }
 
 
@@ -137,6 +161,7 @@ def explore_schema(
     segment_ids: set[str],
     period_ids: set[str],
     final: bool,
+    peer_segment_ids: set[str] = frozenset(),
 ) -> dict:
     """Discovery turn schema: proposals cite only facts the tools returned.
 
@@ -146,7 +171,7 @@ def explore_schema(
     """
     schema = ExploreStep.model_json_schema()
     defs = schema["$defs"]
-    _narrow_tools(defs, namespace, segment_ids, period_ids)
+    _narrow_tools(schema, namespace, segment_ids, period_ids, peer_segment_ids)
     usable = sorted(
         (f for f in returned if f.segment.cohort_id == "full_input"),
         key=lambda f: f.fact_id,

@@ -309,7 +309,8 @@ class _Progress:
                 "Use the synthetic demo run to see the full flow.",
             ) from exc
         except Exception as exc:
-            self.emit(stage, ProgressState.FAILED, "stage_error", candidate_id)
+            code = getattr(exc, "progress_code", "stage_error")
+            self.emit(stage, ProgressState.FAILED, code, candidate_id)
             raise PipelineError(
                 stage, f"{STAGE_LABELS[stage]} failed ({type(exc).__name__})."
             ) from exc
@@ -347,7 +348,7 @@ class _ProgressToolRouter:
         return self._dispatch(candidate_id, call)
 
     def _dispatch(self, candidate_id: str | None, call: ToolCall) -> ToolEvidence:
-        from llm.tools import extend_bundle
+        from llm.tools import ToolRefusedError, extend_bundle
 
         key = call.model_dump_json()
         if key in self.cache:
@@ -358,6 +359,17 @@ class _ProgressToolRouter:
         if count >= limit:
             raise PipelineError(ProgressStage.TOOL_CALL, "Tool call budget exceeded.")
         self.calls[candidate_id] = count + 1
+        try:
+            return self._run_tool(candidate_id, call, key, extend_bundle)
+        except PipelineError as exc:
+            # The tool refused this call (a static code): the model chose a
+            # scope that tool cannot answer. That is a model mistake the
+            # analysis loop reports back, not a broken run.
+            if isinstance(exc.__cause__, ToolRefusedError):
+                raise exc.__cause__ from exc
+            raise
+
+    def _run_tool(self, candidate_id, call, key, extend_bundle) -> ToolEvidence:
         with self.progress.stage(ProgressStage.TOOL_CALL, candidate_id):
             match call:
                 case BreakdownArgs():
