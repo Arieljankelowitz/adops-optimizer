@@ -82,5 +82,22 @@ or reliable floor-change forecasts. The tool does not change ad-serving settings
 uv run pytest
 ```
 
-The normal suite uses synthetic data and mocks; live tests are excluded by default.
-It verifies software behavior, not recommendation quality from the deployed model.
+The normal suite uses synthetic data and mocks; live and full-size tests are excluded
+by default. It verifies software behavior, not recommendation quality from the deployed model.
+
+### Full-size synthetic check
+
+```sh
+uv run pytest -m 'not live'  # includes the opt-in full-size offline test
+uv run python scripts/benchmark_fullsize.py --out /tmp/adops-scale
+```
+
+The benchmark generates its own deterministic, seven-day synthetic CSV (~116k rows);
+it never accepts an existing dataset path. CSVs and bundles stay outside Git.
+For large exports, evidence construction is bounded to the largest traffic exposures,
+ten candidates are judged, one drill-down is allowed per candidate, and final selection
+is by code with the same strict overlap/grounding checks. This trades exhaustive slice
+coverage for demo latency; request exposure is not predicted uplift.
+
+See [synthetic scale validation](docs/SCALE_VALIDATION.md) for measured timings,
+the single live run and its limitations.

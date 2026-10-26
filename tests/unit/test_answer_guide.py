@@ -518,7 +518,8 @@ def test_ranking_is_shown_exactly_the_pairs_its_check_refuses():
     assert set(ids) == {r.recommendation_id for r in recs}
 
 
-def test_a_refused_tool_call_is_reported_to_the_model_not_fatal():
+@pytest.mark.parametrize("fixed_breakdown", [False, True])
+def test_a_refused_tool_call_is_reported_to_the_model_not_fatal(fixed_breakdown):
     """Live regression: 7 of 15 candidates were lost when the model asked for
     peers of a slice that does not fix every dimension; the tool's refusal
     ended the whole candidate as a pipeline error."""
@@ -544,12 +545,21 @@ def test_a_refused_tool_call_is_reported_to_the_model_not_fatal():
         ):
             turn = json.loads(request.messages[-1].content)
             seen["schema"] = request.response_schema
-            call = CompareToPeersArgs(
-                segment_id=c["segment_id"],
-                period_id=c["period_id"],
-                peer_definition_id=turn["peer_definition_ids"][0],
-            )
-            return {"kind": "call_tool", "tool_call": call.model_dump(mode="json")}
+            if fixed_breakdown:
+                from contracts.models import BreakdownArgs
+
+                call = BreakdownArgs(
+                    segment_id=c["segment_id"], period_id=c["period_id"],
+                    by=next(iter(own["filters"])), limit=5,
+                )
+            else:
+                call = CompareToPeersArgs(
+                    segment_id=c["segment_id"],
+                    period_id=c["period_id"],
+                    peer_definition_id=turn["peer_definition_ids"][0],
+                )
+            seen["bad_call"] = call.model_dump(mode="json")
+            return {"kind": "call_tool", "tool_call": seen["bad_call"]}
         return _final_from_guide(request)
 
     client = FakeClient([respond] * 40)
@@ -561,22 +571,23 @@ def test_a_refused_tool_call_is_reported_to_the_model_not_fatal():
     outcome = execute(
         io.BytesIO(SAMPLE.read_bytes()), config, events.append, stages=stages, env={}
     )
-    assert seen["refused"] == "unknown_or_unmatched_peer_definition"
+    expected = ("breakdown_dimension_already_fixed" if fixed_breakdown
+                else "unknown_or_unmatched_peer_definition")
+    assert seen["refused"] == expected
     analysis = next(a for a in outcome.run.analyses if a.candidate_id == seen["candidate"])
     assert analysis.status is AnalysisStatus.COMPLETE
     assert all(a.status is AnalysisStatus.COMPLETE for a in outcome.run.analyses)
     assert len(outcome.run.recommendations) == 15
     (attempt,) = analysis.rejected_attempts
     assert attempt.errors[0].path == "/tool_call"
-    assert "unknown_or_unmatched_peer_definition" in attempt.errors[0].detail
+    assert attempt.errors[0].code is Code.SCHEMA_INVALID
+    assert attempt.errors[0].detail == f"tool refused: {expected}"
     assert [e.message_code for e in events if e.stage.value == "tool_call"] == [
         "tool_call_started",
         "tool_refused",
     ]
     # The narrowed schema would not have offered that call for this slice.
-    peers = seen["schema"]["$defs"].get("CompareToPeersArgs")
-    candidate = outcome.run.bundle.candidates[seen["candidate"]]
-    assert peers is None or candidate.segment_id not in peers["properties"]["segment_id"]["enum"]
+    assert not admitted(seen["schema"], {"kind": "call_tool", "tool_call": seen["bad_call"]})
 
 
 def test_peer_comparison_is_offered_only_for_slices_fixing_every_dimension(bundle):
@@ -618,7 +629,7 @@ def test_a_slice_below_its_baseline_is_never_offered_more_traffic(bundle):
     assert directions == {Relation.GREATER, Relation.LESS}
 
 
-def test_many_overlap_groups_reproduce_legacy_too_long_and_are_code_attached(bundle):
+def test_many_overlap_groups_reproduce_legacy_too_long_and_are_code_attached(bundle, monkeypatch):
     """Replay the stored failure with synthetic IDs; no private data required."""
     from llm.answer import exception_issues
 
@@ -636,6 +647,20 @@ def test_many_overlap_groups_reproduce_legacy_too_long_and_are_code_attached(bun
     errors = exception_issues(caught.value)
     assert any(e.code is Code.SCHEMA_INVALID and e.path == "/overlap_group_ids"
                and e.detail == "contract check failed: too_long" for e in errors)
+    # Replay the legacy parser inside the real analysis loop with a scripted
+    # model echoing the candidate's groups, exactly as the old prompt asked.
+    from llm import analysis
+    from tests.unit.test_reasoning import FakeRouter
+
+    with monkeypatch.context() as patch:
+        patch.setattr(analysis, "CandidateRecommendation", legacy)
+        result = analysis.analyze_candidate(
+            pack, FakeRouter(pack), FakeClient([rec, rec, rec]),
+            RunBudget(max_turns_per_candidate=1),
+        )
+    assert result.status is AnalysisStatus.REJECTED_INVALID
+    assert all(any(e.path == "/overlap_group_ids" and e.detail == "contract check failed: too_long"
+                   for e in attempt.errors) for attempt in result.rejected_attempts)
     assert len(CandidateRecommendation.model_validate(rec).overlap_group_ids) == 100
     # The prompt and model answer do not grow with bookkeeping lists.
     wire = rec | {"overlap_group_ids": []}
