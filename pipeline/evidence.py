@@ -112,6 +112,10 @@ OBSERVATION_OPTION_LIMIT = 24
 # Issues of one rule listed with their facts per candidate; repeats of the same
 # rule on other overlapping slices add no new restriction, only tokens.
 DETAILED_ISSUES_PER_RULE = 2
+# Affected slices a listed issue shows (the candidate's own first). A row-level
+# rule on a full-size export names up to ``max_issue_segments`` slices; the
+# restriction is the same for all of them, so the rest only cost tokens.
+ISSUE_SEGMENTS_SHOWN = 4
 
 
 class EvidenceBudgetError(ValueError):
@@ -194,6 +198,7 @@ def split_issues(
     segment: Segment,
     issues: Iterable[QualityIssue],
     segments: Mapping[str, Segment],
+    facts: Mapping[str, Fact] | None = None,
 ) -> tuple[list[QualityIssue], list[QualityIssue]]:
     """(listed in full, summarised) for one candidate's pack.
 
@@ -219,7 +224,7 @@ def split_issues(
             and per_rule[issue.rule_id] < DETAILED_ISSUES_PER_RULE
         ):
             per_rule[issue.rule_id] += 1
-            detailed.append(issue_view(issue, segment, segments))
+            detailed.append(issue_view(issue, segment, segments, facts))
         else:
             summarised.append(issue)
     detailed.sort(key=lambda i: i.issue_id)
@@ -240,12 +245,17 @@ def issue_fact_ids(issues: Iterable[QualityIssue]) -> list[str]:
 
 
 def issue_view(
-    issue: QualityIssue, segment: Segment, segments: Mapping[str, Segment]
+    issue: QualityIssue,
+    segment: Segment,
+    segments: Mapping[str, Segment],
+    facts: Mapping[str, Fact] | None = None,
 ) -> QualityIssue:
-    """One candidate's view of an issue: only the affected scopes it overlaps.
+    """One candidate's view of an issue: a few of the affected scopes it overlaps.
 
-    The full issue (every affected segment and candidate) stays in the bundle;
-    the validator and the report read that, never the pack.
+    At most ``ISSUE_SEGMENTS_SHOWN`` slices, the candidate's own first, and
+    with ``facts`` only the per-slice measurements of the slices shown. The
+    full issue (every affected segment, fact and candidate) stays in the
+    bundle; the validator and the report read that, never the pack.
     """
     # Unknown scopes touch conservatively, as in ``IssueIndex``, so they stay.
     touching = [
@@ -254,10 +264,26 @@ def issue_view(
         if sid not in segments
         or segments_overlap(segments[sid].filters, segment.filters)
     ]
+    shown = sorted(touching, key=lambda sid: sid != segment.segment_id)
+    shown = set(shown[:ISSUE_SEGMENTS_SHOWN])
+    touching = [sid for sid in touching if sid in shown]
+    measured = list(issue.measured_fact_ids)
+    if facts is not None and touching:
+        # Per-slice measurements of slices not shown (a row-level rule keeps
+        # one per affected slice); totals and unknown refs stay.
+        hidden = [
+            segments[sid].filters
+            for sid in issue.segment_ids
+            if sid in segments and sid not in shown
+        ]
+        measured = [
+            r for r in measured if r not in facts or facts[r].segment.filters not in hidden
+        ]
     return issue.model_copy(
         update={
             # An empty list means "every segment"; never narrow to that.
             "segment_ids": touching or issue.segment_ids,
+            "measured_fact_ids": measured,
             "affected_candidate_ids": [],
         },
         deep=True,
@@ -505,6 +531,15 @@ def pack_payload(pack: CandidatePack) -> dict:
     """
     payload = pack.model_dump(mode="json")
     payload["untrusted_segment_labels"] = payload.pop("segments")
+    # Code attaches the overlap groups to the answer; the model only needs to
+    # know how many other candidates share this traffic. A busy export gives
+    # one slice dozens of groups.
+    candidate = payload["candidate"]
+    candidate["overlap_group_count"] = len(candidate.pop("overlap_group_ids"))
+    # Likewise every issue on overlapping traffic: a coarse slice of a busy
+    # export touches over a thousand. The ones that bear on its claims are in
+    # quality_issues, the rest are counted by rule in the answer guide.
+    candidate["quality_issue_count"] = len(candidate.pop("quality_issue_ids"))
     # Dictionary-encoded metadata avoids repeating long scope/unit/formula
     # strings. Table indices are metadata, never claim quantities. Stable fact
     # IDs and all decimal values stay verbatim; no numeric rounding/compression.
@@ -728,7 +763,10 @@ def build_evidence_bounded(
             candidate.model_copy(update={"quality_issue_ids": issue_ids}, deep=True)
         )
     chosen = [c for c in enriched if c.eligibility is not EligibilityStatus.REJECTED]
-    chosen = [] if quality.has_fatal else chosen[: config.max_candidates]
+    cap = config.max_candidates
+    if len(metrics.segments) > config.large_export_segments:
+        cap = min(cap, config.large_export_max_candidates)
+    chosen = [] if quality.has_fatal else chosen[:cap]
 
     assumptions: dict[str, Assumption] = {}
     requests = []
@@ -817,7 +855,7 @@ def build_evidence_bounded(
             quality.issues, segments, periods, candidate.segment_id, candidate.period_id
         )
         segment = segments[candidate.segment_id]
-        detailed, summarised = split_issues(candidate, segment, issues, segments)
+        detailed, summarised = split_issues(candidate, segment, issues, segments, facts)
         scenario_list = [
             s
             for s in scenarios

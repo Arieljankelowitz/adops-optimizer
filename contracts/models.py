@@ -432,7 +432,10 @@ class CandidateRecommendation(Contract):
     risk_codes: list[RiskCode] = Field(max_length=7)
     success_metric_keys: list[MetricKey] = Field(max_length=4)
     confidence_in_observation: Confidence
-    overlap_group_ids: list[OverlapGroupId] = Field(max_length=8)
+    # Filled by code from the candidate, never echoed by the model (see
+    # llm.answer.attach_code_fields), so it is bounded like the candidate's own
+    # list: a slice of a full-size export overlaps dozens of other candidates.
+    overlap_group_ids: list[OverlapGroupId]
     merge_source_candidate_ids: list[CandidateId] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")

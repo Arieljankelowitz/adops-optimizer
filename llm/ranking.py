@@ -1,9 +1,11 @@
 """Reference-only final selection: bounded repairs, stable input and no evidence rewriting."""
 
+from decimal import Decimal
+
 from pydantic import ValidationError
 
 from contracts.config import RunBudget
-from contracts.enums import Decision
+from contracts.enums import Decision, FactKind, MetricKey
 from contracts.ids import canonical_json
 from contracts.models import RankingIR, ValidatedRecommendation
 from contracts.runtime import ChatMessage, FactRegistry, ModelClient
@@ -168,6 +170,47 @@ def check_ranking(ranking, validated, registry):
             raise RankingError("summary_unknown_fact")
 
 
+def select_by_exposure(
+    validated: list[ValidatedRecommendation], registry: FactRegistry,
+) -> RankingIR:
+    """Code-only final selection for large exports; no invented uplift or merges.
+
+    The model has already judged every recommendation. Sort by measured request
+    exposure, greedily retain disjoint scopes, then apply the same ranking
+    checker (and the runner's strict validator). Unselected recommendations
+    remain in the audit, with all their evidence and caveats unchanged.
+    """
+    actionable = [r for r in validated if r.recommendation.decision in (
+        Decision.RECOMMEND_TEST, Decision.INVESTIGATE_FIRST,
+    )]
+    if any(r.run_namespace != registry.namespace for r in actionable):
+        raise RankingError("ranking_namespace_mismatch")
+    if len({r.recommendation_id for r in actionable}) != len(actionable):
+        raise RankingError("duplicate_validated_id")
+    if any(ref not in registry for r in actionable for ref in _refs(r)):
+        raise RankingError("unresolved_validated_fact")
+    exposure = {
+        (f.segment.segment_id, f.period.period_id): f.value
+        for f in registry.values()
+        if f.kind is FactKind.MEASURED and f.metric is MetricKey.REQUESTS
+        and f.value is not None
+    }
+    actionable.sort(key=lambda r: (
+        -exposure.get((r.recommendation.segment_id, r.recommendation.period_id), Decimal(0)),
+        r.recommendation_id,
+    ))
+    conflicts = conflicting_pairs(actionable, registry)
+    chosen, banned = [], set()
+    for r in actionable:
+        rid = r.recommendation_id
+        if rid not in banned and len(chosen) < 10:
+            chosen.append(rid)
+            banned.update(x for pair in conflicts if rid in pair for x in pair)
+    ranking = RankingIR(ranked_recommendation_ids=chosen, merge_instructions=[], summary_themes=[])
+    check_ranking(ranking, actionable, registry)
+    return ranking
+
+
 def rank_recommendations(
     validated: list[ValidatedRecommendation],
     registry: FactRegistry,
@@ -201,8 +244,14 @@ def rank_recommendations(
             role="user",
             content=canonical_json(
                 {
+                    # Overlap groups reach the model as conflicting_pairs; the
+                    # raw group lists grow with the export, not the decision.
                     "validated_recommendations": [
-                        r.model_dump(mode="json") for r in actionable
+                        r.model_dump(
+                            mode="json",
+                            exclude={"recommendation": {"overlap_group_ids"}},
+                        )
+                        for r in actionable
                     ],
                     "evidence": facts_view([registry[r] for r in sorted(refs)]),
                     # Computed by the same rule the ranking check applies.

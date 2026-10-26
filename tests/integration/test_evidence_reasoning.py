@@ -39,7 +39,7 @@ def recommendation(candidate, fact_id):
         risk_codes=[],
         success_metric_keys=[],
         confidence_in_observation="low",
-        overlap_group_ids=candidate["overlap_group_ids"],
+        overlap_group_ids=[],  # code attaches the candidate's groups
     )
 
 

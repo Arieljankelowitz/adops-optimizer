@@ -21,7 +21,7 @@ from contracts.runtime import FactRegistry, ModelResponse
 from llm.analysis import analyze_candidate, reasoning_stats
 from llm.client import ModelAuthError, ModelOutputError
 from llm.prompts import CANDIDATE_PROMPT, build_candidate_messages, fact_view, facts_view
-from llm.ranking import RankingError, rank_recommendations
+from llm.ranking import RankingError, check_ranking, rank_recommendations, select_by_exposure
 from scripts.export_contracts import build_examples
 
 
@@ -197,15 +197,30 @@ def test_grounding_and_schema_share_two_repairs(pack, error_code):
     client = FakeClient([final(pack), answer, answer])
     result = analyze_candidate(pack, router, client, RunBudget())
     assert result.status is AnalysisStatus.REJECTED_INVALID
-    assert len(client.requests) == 3 and result.repairs == 2
+    # The correction repeated the same named error: no third generation.
+    assert len(client.requests) == 2 and result.repairs == 1
     assert [[e.code.value for e in a.errors] for a in result.rejected_attempts] == [
         [error_code]
-    ] * 3
+    ] * 2
     # The repair turn shows the refused answer, then the named error.
     repair = client.requests[1].messages
     assert repair[-3].role == "assistant" and json.loads(repair[-3].content) == final(pack)
     errors = json.loads(repair[-2].content)["errors"]
     assert [(e["code"], e["path"]) for e in errors] == [(error_code, "recommendation")]
+
+
+def test_a_correction_with_new_errors_keeps_its_second_repair(pack):
+    router = FakeRouter(pack)
+    paths = iter(["recommendation", "observation_statements", "risk_codes"])
+    router.validate_analysis = lambda result: ValidationRejected(
+        errors=[ValidationIssue(code="wrong_role", path=next(paths), detail="synthetic")]
+    )
+    answer = recommendation(pack).model_dump(mode="json")
+    client = FakeClient([final(pack), answer, answer])
+    result = analyze_candidate(pack, router, client, RunBudget())
+    assert result.status is AnalysisStatus.REJECTED_INVALID
+    assert len(client.requests) == 3 and result.repairs == 2
+    assert len(result.rejected_attempts) == 3
 
 
 def test_auth_is_not_retried_or_repaired(pack):
@@ -387,6 +402,26 @@ def test_ranking_deterministic_inputs_retain_caveats_and_do_not_rewrite(pack):
     assert first == second and a.requests == b.requests
     assert "counter_evidence_fact_ids" in a.requests[0].messages[1].content
     assert "observation_statements" in a.requests[0].messages[1].content
+
+
+def test_code_selection_is_order_independent_and_preserves_nonadditivity(pack):
+    first, second = validated(pack, 1), validated(pack, 2)
+    registry = FactRegistry(pack.run_namespace, pack.facts)
+    selected = select_by_exposure([first, second], registry)
+    assert selected == select_by_exposure([second, first], registry)
+    # The scopes are identical, even without detector group metadata.
+    assert len(selected.ranked_recommendation_ids) == 1
+    assert not selected.merge_instructions and not selected.summary_themes
+    check_ranking(selected, [first, second], registry)
+
+
+def test_code_selection_refuses_foreign_namespaces_and_unresolved_facts(pack):
+    registry = FactRegistry(pack.run_namespace, pack.facts)
+    rec = validated(pack)
+    with pytest.raises(RankingError, match="namespace"):
+        select_by_exposure([rec.model_copy(update={"run_namespace": "N_" + "0" * 16})], registry)
+    with pytest.raises(RankingError, match="unresolved"):
+        select_by_exposure([rec], FactRegistry(pack.run_namespace))
 
 
 def test_ranking_unknown_ids_and_one_repair(pack):

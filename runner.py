@@ -420,6 +420,15 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
                stages: PipelineStages, progress: _Progress, env: Mapping[str, str],
                monotonic: Callable[[], float]) -> _ModelResult:
     budget = config.budget
+    large_export = len(bundle.segments) > config.evidence.large_export_segments
+    if large_export:
+        # Full-size live proof spent 30 tool rounds repeating the same
+        # breakdowns. One drill-down followed by a final judgment is enough;
+        # repairs and both strict validation gates are unchanged.
+        budget = budget.model_copy(update={
+            "max_tool_calls_per_candidate": min(budget.max_tool_calls_per_candidate, 1),
+            "max_turns_per_candidate": min(budget.max_turns_per_candidate, 2),
+        })
     if config.model_profile_id is None:
         progress.skip(ProgressStage.MODEL_READINESS, "no_model_profile")
         return _ModelResult(RunStatus.DETERMINISTIC_ONLY)
@@ -571,8 +580,13 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
         progress.check_cancel(ProgressStage.RANKING)
         progress.emit(ProgressStage.RANKING, ProgressState.STARTED, "ranking_started")
         try:
-            ranking = stages.rank_recommendations(result.recommendations, bundle.facts, client,
-                                                  budget)
+            if large_export:
+                from llm.ranking import select_by_exposure
+
+                ranking = select_by_exposure(result.recommendations, bundle.facts)
+            else:
+                ranking = stages.rank_recommendations(result.recommendations, bundle.facts, client,
+                                                      budget)
             verdict = stages.validate_analysis(ranking, ranking_bundle)
         except NotImplementedError:
             progress.emit(ProgressStage.RANKING, ProgressState.FAILED, "ranking_not_implemented")
@@ -583,7 +597,8 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
         else:
             if verdict.accepted:
                 result.ranking = verdict.value
-                progress.emit(ProgressStage.RANKING, ProgressState.SUCCEEDED, "accepted")
+                progress.emit(ProgressStage.RANKING, ProgressState.SUCCEEDED,
+                              "selected_by_exposure" if large_export else "accepted")
             else:
                 result.failures["ranking"] = tuple(verdict.errors)
                 progress.emit(ProgressStage.RANKING, ProgressState.FAILED, "rejected")
@@ -598,6 +613,8 @@ def _run_model(bundle: EvidenceBundle, metrics: MetricsStore, config: RunConfig,
     result.model_call_counts = {"generations": reasoning.generations,
                                 "ranking_calls": reasoning.ranking_calls,
                                 "invalid_outputs": reasoning.invalid_outputs}
+    if large_export and result.ranking is not None:
+        result.model_call_counts["exposure_selection"] = 1
     if budget.explore_enabled:
         # Whether optional discovery ran to the end, and how many candidates it raised.
         result.model_call_counts.update(

@@ -17,6 +17,7 @@ metric, formula, segment and period (plus left/right facts for comparisons).
 """
 
 import hashlib
+import weakref
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -524,6 +525,30 @@ def stability_reasons(row: Mapping[str, Any]) -> set[str]:
     return set(reason.split(",")) if isinstance(reason, str) else set()
 
 
+# Lookup indexes over a store's frames, built on first use. ``aggregate`` never
+# mutates a frame after building it, so an index stays valid for the frame's
+# life; it is dropped with the frame. At full size (100k+ rows) repeated
+# whole-frame boolean filters dominated detection and evidence building.
+_INDEXES: dict[tuple[int, str], tuple[weakref.ref, Any]] = {}
+
+
+def _frame_index(frame: pd.DataFrame, kind: str, build) -> Any:
+    key = (id(frame), kind)
+    hit = _INDEXES.get(key)
+    if hit is None or hit[0]() is not frame:
+        ref = weakref.ref(frame, lambda _, key=key: _INDEXES.pop(key, None))
+        hit = (ref, build(frame))
+        _INDEXES[key] = hit
+    return hit[1]
+
+
+def _first_rows(frame: pd.DataFrame) -> dict[tuple[str, str], int]:
+    positions: dict[tuple[str, str], int] = {}
+    for n, key in enumerate(zip(frame["segment_id"], frame["period_id"], strict=True)):
+        positions.setdefault(key, n)
+    return positions
+
+
 def stats_row(store: MetricsStore, segment_id: str, period_id: str) -> dict[str, Any] | None:
     """Sums and coverage for an observed (segment, period), or ``None`` when unobserved."""
     period = store.periods[period_id]
@@ -531,32 +556,52 @@ def stats_row(store: MetricsStore, segment_id: str, period_id: str) -> dict[str,
         frame = store.daily
     else:
         frame = store.aggregates
-    match = frame[(frame["segment_id"] == segment_id) & (frame["period_id"] == period_id)]
-    if match.empty:
+    n = _frame_index(frame, "first_rows", _first_rows).get((segment_id, period_id))
+    if n is None:
         return None
-    return match.iloc[0].to_dict()
+    return frame.iloc[n].to_dict()
 
 
 def daily_rows(store: MetricsStore, segment_id: str) -> pd.DataFrame:
     """Observed daily rows for a segment, sorted by day."""
     frame = store.daily
-    return frame[frame["segment_id"] == segment_id].sort_values("day")
+    groups = _frame_index(
+        frame, "segment_rows", lambda f: f.groupby("segment_id", sort=False).indices
+    )
+    positions = groups.get(segment_id)
+    if positions is None:
+        return frame.iloc[0:0].sort_values("day")
+    return frame.iloc[positions].sort_values("day")
 
 
-def _five_rows(store: MetricsStore, period: Period) -> pd.DataFrame:
+class _FiveRows:
+    """One period's five-dimension rows as arrays, with per-label masks built on demand."""
+
+    def __init__(self, rows: pd.DataFrame) -> None:
+        self.size = len(rows)
+        self.labels = {d: rows[d.value].to_numpy(dtype=object) for d in Dimension}
+        self.columns = {c: rows[c].to_numpy(dtype=object) for c in SUM_COLUMNS}
+        self.lines = rows["lines"].to_numpy(dtype=object)
+        self._masks: dict[tuple[Dimension, str], np.ndarray] = {}
+
+    def mask(self, filters: Mapping[Dimension, str]) -> np.ndarray:
+        out = np.ones(self.size, dtype=bool)
+        for dim, label in filters.items():
+            key = (dim, label)
+            if key not in self._masks:
+                self._masks[key] = self.labels[dim] == label
+            out &= self._masks[key]
+        return out
+
+
+def _five_rows(store: MetricsStore, period: Period) -> _FiveRows | None:
     frame = store.daily if len(period.included_dates) == 1 else store.aggregates
-    return frame[
-        (frame["level"] == level_name(FIVE))
-        & (frame["cohort_id"] == FULL_INPUT)
-        & (frame["period_id"] == period.period_id)
-    ]
 
+    def build(f: pd.DataFrame) -> dict[str, _FiveRows]:
+        five = f[(f["level"] == level_name(FIVE)) & (f["cohort_id"] == FULL_INPUT)]
+        return {pid: _FiveRows(rows) for pid, rows in five.groupby("period_id", sort=False)}
 
-def _mask(frame: pd.DataFrame, filters: Mapping[Dimension, str]) -> pd.Series:
-    mask = pd.Series(True, index=frame.index)
-    for dim, label in filters.items():
-        mask &= frame[dim.value] == label
-    return mask
+    return _frame_index(frame, "five_rows", build).get(period.period_id)
 
 
 def combined_stats(
@@ -567,14 +612,19 @@ def combined_stats(
 ) -> dict[str, Any] | None:
     """Exact sums for any filter set (optionally minus a sub-slice) from five-dimension rows."""
     five = _five_rows(store, period)
-    mask = _mask(five, include)
-    if exclude is not None:
-        mask &= ~_mask(five, exclude)
-    chosen = five[mask]
-    if chosen.empty:
+    if five is None:
         return None
-    stats: dict[str, Any] = {c: sum(chosen[c].tolist(), start=type(chosen[c].iloc[0])(0)) for c in SUM_COLUMNS}
-    lines = [n for group in chosen["lines"] for n in group]
+    mask = five.mask(include)
+    if exclude is not None:
+        mask &= ~five.mask(exclude)
+    chosen = np.flatnonzero(mask)
+    if not len(chosen):
+        return None
+    stats: dict[str, Any] = {}
+    for c in SUM_COLUMNS:
+        values = five.columns[c][chosen].tolist()
+        stats[c] = sum(values, start=type(values[0])(0))
+    lines = [n for group in five.lines[chosen] for n in group]
     stats["row_set_hash"] = row_set_hash(lines)
     return stats
 
@@ -636,20 +686,66 @@ def ratio_value(numerator: Decimal, denominator: Decimal, scale: Decimal = Decim
 
 
 class IssueIndex:
-    """Which quality issues touch a (segment, period); unknown references count as touching."""
+    """Which quality issues touch a (segment, period); unknown references count as touching.
+
+    Two slices share traffic unless they fix a dimension differently, so an
+    issue slice fixing dimensions ``D`` touches a slice fixing ``E`` exactly
+    when their labels agree on ``D & E``. Issue slices are indexed by those
+    labels: a full-size export has thousands of issues over hundreds of slices
+    each, and pairwise checks dominated the run.
+    """
 
     def __init__(self, store: MetricsStore, quality: QualityReport) -> None:
         self._store = store
         self._issues = list(quality.issues)
+        # Issues touching every slice: no scope, or a scope not in the store.
+        self._everywhere: set[int] = set()
+        self._by_dims: dict[tuple[Dimension, ...], list[tuple[Mapping[Dimension, str], int]]] = {}
+        for n, issue in enumerate(self._issues):
+            if not issue.segment_ids:
+                self._everywhere.add(n)
+                continue
+            for segment_id in issue.segment_ids:
+                other = store.segments.get(segment_id)
+                if other is None:
+                    self._everywhere.add(n)
+                    break
+                dims = tuple(d for d in Dimension if d in other.filters)
+                self._by_dims.setdefault(dims, []).append((other.filters, n))
+        self._projections: dict[tuple[tuple[Dimension, ...], tuple[Dimension, ...]], dict] = {}
+        self._segments: dict[str, frozenset[int]] = {}
+        self._periods: dict[tuple[str, bool], frozenset[int]] = {}
+        self._memo: dict[tuple[str, str], list[str]] = {}
+        self._restrictions: dict[tuple[str, str], frozenset[InferenceRestriction]] = {}
 
-    def _touches_segment(self, issue_segments: Sequence[str], segment: Segment) -> bool:
-        if not issue_segments:
-            return True
-        for segment_id in issue_segments:
-            other = self._store.segments.get(segment_id)
-            if other is None or segments_overlap(other.filters, segment.filters):
-                return True
-        return False
+    def _touching_segment(self, segment: Segment) -> frozenset[int]:
+        hit = self._segments.get(segment.segment_id)
+        if hit is not None:
+            return hit
+        out = set(self._everywhere)
+        for dims, entries in self._by_dims.items():
+            shared = tuple(d for d in dims if d in segment.filters)
+            index = self._projections.get((dims, shared))
+            if index is None:
+                index = {}
+                for filters, n in entries:
+                    index.setdefault(tuple(filters[d] for d in shared), set()).add(n)
+                self._projections[(dims, shared)] = index
+            out |= index.get(tuple(segment.filters[d] for d in shared), set())
+        hit = self._segments[segment.segment_id] = frozenset(out)
+        return hit
+
+    def _dated(self, period: Period, covers: bool) -> frozenset[int]:
+        """Issues on dates that intersect ``period`` (or, ``covers``, contain all of it)."""
+        key = (period.period_id, covers)
+        hit = self._periods.get(key)
+        if hit is None:
+            test = self._covers_period if covers else self._touches_period
+            hit = frozenset(
+                n for n, issue in enumerate(self._issues) if test(issue.period_ids, period)
+            )
+            self._periods[key] = hit
+        return hit
 
     def _touches_period(self, issue_periods: Sequence[str], period: Period) -> bool:
         if not issue_periods:
@@ -662,11 +758,11 @@ class IssueIndex:
         return False
 
     def issues_for(self, segment: Segment, period: Period) -> list[str]:
-        return sorted(
-            i.issue_id
-            for i in self._issues
-            if self._touches_segment(i.segment_ids, segment) and self._touches_period(i.period_ids, period)
-        )
+        key = (segment.segment_id, period.period_id)
+        if key not in self._memo:
+            chosen = self._touching_segment(segment) & self._dated(period, False)
+            self._memo[key] = sorted(self._issues[n].issue_id for n in chosen)
+        return list(self._memo[key])
 
     def _covers_period(self, issue_periods: Sequence[str], period: Period) -> bool:
         if not issue_periods:
@@ -685,13 +781,13 @@ class IssueIndex:
         does not block a whole-period inference; detectors handle that with
         the sensitivity period instead.
         """
-        out: set[InferenceRestriction] = set()
-        for issue in self._issues:
-            if self._touches_segment(issue.segment_ids, segment) and self._covers_period(
-                issue.period_ids, period
-            ):
-                out.update(issue.inference_restrictions)
-        return out
+        key = (segment.segment_id, period.period_id)
+        if key not in self._restrictions:
+            chosen = self._touching_segment(segment) & self._dated(period, True)
+            self._restrictions[key] = frozenset(
+                r for n in chosen for r in self._issues[n].inference_restrictions
+            )
+        return set(self._restrictions[key])
 
 
 class FactBuilder:
@@ -709,6 +805,8 @@ class FactBuilder:
         self.input_sha256 = store.input_sha256
         self.issues = IssueIndex(store, quality)
         self.facts: dict[str, Fact] = {}
+        # Daily rows per segment as records; every candidate reads the account's.
+        self._daily_records: dict[str, list[dict[str, Any]]] = {}
 
     def _fact(
         self,
@@ -930,10 +1028,13 @@ class FactBuilder:
 
     def daily_facts(self, segment: Segment, period: Period, metric: MetricKey) -> list[Fact]:
         """One fact per observed day of ``segment`` inside ``period`` (full-input or valid cohort)."""
-        days = daily_rows(self.store, segment.segment_id)
-        days = days[days["day"].isin(set(period.included_dates))]
+        records = self._daily_records.get(segment.segment_id)
+        if records is None:
+            records = daily_rows(self.store, segment.segment_id).to_dict("records")
+            self._daily_records[segment.segment_id] = records
+        dates = set(period.included_dates)
         facts = []
-        for row in days.to_dict("records"):
+        for row in (r for r in records if r["day"] in dates):
             day = self.store.periods[row["period_id"]]
             if metric in ADDITIVE:
                 facts.append(self.additive(segment, day, row, metric))
