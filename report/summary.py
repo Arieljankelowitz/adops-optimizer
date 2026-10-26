@@ -791,7 +791,15 @@ class _Builder:
                             self.run_id), Lit(".")]
         out.append(("Validation summary", [counts, *self.unselected(ranked), *self.excluded()]))
 
+        selection_note = []
+        if self.run.manifest.model_call_counts.get("exposure_selection"):
+            selection_note = [[Lit(
+                "Final selection is by code, ordered by measured request exposure, not "
+                "predicted uplift. Overlapping scopes are not selected together; all "
+                "model-judged, validated recommendations remain in the audit."
+            )]]
         out.append(("Method and limits", [
+            *selection_note,
             [Lit("Python measures every quantity; the self-hosted model only selects typed "
                  "evidence, tests and codes; code validates each reference and renders every "
                  "number.")],

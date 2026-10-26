@@ -21,7 +21,7 @@ from contracts.runtime import FactRegistry, ModelResponse
 from llm.analysis import analyze_candidate, reasoning_stats
 from llm.client import ModelAuthError, ModelOutputError
 from llm.prompts import CANDIDATE_PROMPT, build_candidate_messages, fact_view, facts_view
-from llm.ranking import RankingError, rank_recommendations
+from llm.ranking import RankingError, check_ranking, rank_recommendations, select_by_exposure
 from scripts.export_contracts import build_examples
 
 
@@ -402,6 +402,26 @@ def test_ranking_deterministic_inputs_retain_caveats_and_do_not_rewrite(pack):
     assert first == second and a.requests == b.requests
     assert "counter_evidence_fact_ids" in a.requests[0].messages[1].content
     assert "observation_statements" in a.requests[0].messages[1].content
+
+
+def test_code_selection_is_order_independent_and_preserves_nonadditivity(pack):
+    first, second = validated(pack, 1), validated(pack, 2)
+    registry = FactRegistry(pack.run_namespace, pack.facts)
+    selected = select_by_exposure([first, second], registry)
+    assert selected == select_by_exposure([second, first], registry)
+    # The scopes are identical, even without detector group metadata.
+    assert len(selected.ranked_recommendation_ids) == 1
+    assert not selected.merge_instructions and not selected.summary_themes
+    check_ranking(selected, [first, second], registry)
+
+
+def test_code_selection_refuses_foreign_namespaces_and_unresolved_facts(pack):
+    registry = FactRegistry(pack.run_namespace, pack.facts)
+    rec = validated(pack)
+    with pytest.raises(RankingError, match="namespace"):
+        select_by_exposure([rec.model_copy(update={"run_namespace": "N_" + "0" * 16})], registry)
+    with pytest.raises(RankingError, match="unresolved"):
+        select_by_exposure([rec], FactRegistry(pack.run_namespace))
 
 
 def test_ranking_unknown_ids_and_one_repair(pack):

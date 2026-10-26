@@ -60,6 +60,10 @@ def _check(outcome, model, events, min_validated):
         candidate = bundle.candidates[r.recommendation.candidate_id]
         assert r.recommendation.overlap_group_ids == candidate.overlap_group_ids
     assert run.ranking is not None and run.ranking.ranked_recommendation_ids
+    assert outcome.artifact.manifest.model_call_counts["exposure_selection"] == 1
+    assert all(len(a.tool_evidence) <= 1 and a.generation_turns <= 2 for a in detector)
+    assert not any(r.response_schema_name == "recommendation_ranking" for r in model.requests)
+    assert "Final selection is by code" in outcome.report.markdown
     # Every request fits the profile's prompt window.
     limit = load_profile().max_prompt_tokens
     assert max(estimate_prompt_tokens(r.messages) for r in model.requests) <= limit

@@ -588,6 +588,9 @@ class _Renderer:
             return
         if self.run.ranking is None:
             d.line("The final ranking did not complete; order follows candidate order.")
+        elif self.run.manifest.model_call_counts.get("exposure_selection"):
+            d.line("Final selection is by code using measured request exposure, not predicted "
+                   "uplift; overlapping scopes are not selected together.")
             d.line()
         if len(ranked) < 5:
             d.line(
