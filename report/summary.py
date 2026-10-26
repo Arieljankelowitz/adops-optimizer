@@ -22,12 +22,12 @@ from html.parser import HTMLParser
 from contracts.enums import (
     Decision,
     DetectorFamily,
+    EligibilityStatus,
     FactKind,
     MetricKey,
     QualityRuleId,
     RenderRole,
     RunStatus,
-    ScenarioTemplate,
     Severity,
     Unit,
     ValidityStatus,
@@ -50,7 +50,7 @@ from contracts.templates import (
     TestTemplateId,
 )
 from pipeline.quality import render_message
-from pipeline.scenarios import PARAMETERS
+from pipeline.shortlist import Lead, collapse, select, total_signature
 from report import text as T
 from report.opportunities import Opportunities
 from report.render import (
@@ -215,6 +215,7 @@ class _Builder:
         self.planner = Opportunities(run)
         self.plans = {r.recommendation.candidate_id: self.planner.plan(r)
                       for r in run.recommendations if _actionable(r.recommendation)}
+        self.card_merges: dict[str, list[str]] = {}
         self.issue_facts = {f.fact_id: f for f in self.b.quality.facts}
         self.issue_facts.update((f.fact_id, f) for f in self.b.facts.values())
         self.measured: dict[tuple[str, str, MetricKey], Fact] = {}
@@ -280,8 +281,6 @@ class _Builder:
             reason = _plain(fact.validity.reason or "no reason recorded", _MAX_REASON)
             return [Val(f"unavailable ({reason})", fact.fact_id, role, untrusted=True)]
         out: Line = [Val(format_value(fact.value, fact.unit), fact.fact_id, role)]
-        if fact.validity.status is ValidityStatus.TAINTED:
-            out.append(Lit(f" ({T.VALIDITY_TEXT[ValidityStatus.TAINTED]})"))
         return out
 
     def metric_line(self, fact: Fact, role: RenderRole = RenderRole.OBSERVATION) -> Line:
@@ -366,8 +365,13 @@ class _Builder:
             return (issue.severity is Severity.FATAL, priority,
                     exposure.value if exposure and exposure.value is not None else Decimal(0))
 
-        relevant = [i for i in issues if i.severity is Severity.FATAL
-                    or account_wide(i) or i.rule_id in (QualityRuleId.DQ04, QualityRuleId.DQ10)]
+        def material(issue: QualityIssue) -> bool:
+            exposure = self.issue_facts.get(issue.request_exposure_fact_id)
+            return (issue.severity is Severity.FATAL or exposure is None
+                    or exposure.value is None or exposure.value >= Decimal("0.00005"))
+
+        relevant = [i for i in issues if material(i) and (i.severity is Severity.FATAL
+                    or account_wide(i) or i.rule_id in (QualityRuleId.DQ04, QualityRuleId.DQ10))]
         relevant.sort(key=weight, reverse=True)
         chosen = []
         seen = set()
@@ -417,15 +421,23 @@ class _Builder:
     def ordered_recommendations(self) -> list[ValidatedRecommendation]:
         actionable = {r.recommendation_id: r for r in self.run.recommendations
                       if _actionable(r.recommendation)}
-        confidence = {"high": 2, "medium": 1, "low": 0}
-        # A ranking may omit or absorb valid findings. It must not hide them.
-        # Stable family/ID ties give variety without overriding dollar priority.
-        return sorted(actionable.values(), key=lambda rec: (
-            -self.plans[rec.recommendation.candidate_id].score,
-            -confidence[rec.recommendation.confidence_in_observation],
-            self.plans[rec.recommendation.candidate_id].family.value,
-            rec.recommendation_id,
-        ))[:MAX_CARDS]
+        leads = []
+        for rec in actionable.values():
+            r = rec.recommendation
+            cand = self.b.candidates.get(r.candidate_id)
+            metrics = [self.planner.metric(r, m) for m in
+                       (MetricKey.REQUESTS, MetricKey.REVENUE, MetricKey.PROFIT)]
+            complete = all(f is not None and f.value is not None for f in metrics)
+            leads.append(Lead(
+                rec.recommendation_id, self.plans[r.candidate_id].family,
+                self.b.segments[r.segment_id].filters, r.period_id,
+                metrics[0].provenance.source_row_set_hash if complete else None,
+                total_signature(*(f.value for f in metrics)) if complete else None,
+                self.plans[r.candidate_id].score,
+                cand is None or cand.eligibility is EligibilityStatus.ELIGIBLE,
+            ))
+        distinct, self.card_merges = collapse(leads)
+        return [actionable[x.key] for x in select(distinct, MAX_CARDS)]
 
     def card(self, rank: int, rec: ValidatedRecommendation) -> Card:
         r = rec.recommendation
@@ -501,28 +513,58 @@ class _Builder:
             DetectorFamily.FLOOR_HIGH_BID: MetricKey.RESPONSE_WEIGHTED_BID,
             DetectorFamily.FLOOR_LOW_BID: MetricKey.RESPONSE_WEIGHTED_BID,
             DetectorFamily.WINS_IMPRESSIONS_DISCREPANCY: MetricKey.IMPRESSION_TO_WIN_RATE,
+            DetectorFamily.COMBINATION_OUTLIER: MetricKey.PROFIT_PER_MILLION_REQUESTS,
         }.get(family)
         target = self.planner.metric(r, metric) if metric else None
         out: list[Line] = []
+        if family in (DetectorFamily.FLOOR_HIGH_BID, DetectorFamily.FLOOR_LOW_BID) and target:
+            floor = self.planner.metric(r, MetricKey.RESPONSE_WEIGHTED_FLOOR)
+            if floor:
+                out.append([Lit("Average bid: "), *self.value(target), Lit(" versus an average floor of "),
+                            *self.value(floor), Lit("; test pricing before changing it broadly.")])
+                cand = self.b.candidates.get(r.candidate_id)
+                if cand:
+                    own_ratio = next((self.fact(i) for i in cand.trigger_fact_ids
+                                      if self.fact(i).comparison and self.fact(i).metric is metric), None)
+                    account_ratio = next((self.fact(i) for i in cand.peer_fact_ids
+                                          if self.fact(i).comparison and self.fact(i).metric is metric), None)
+                    if family is DetectorFamily.FLOOR_HIGH_BID and own_ratio and account_ratio:
+                        out.append([Lit("Bid-to-floor ratio: "), *self.value(own_ratio),
+                                    Lit(" versus "), *self.value(account_ratio, RenderRole.BASELINE),
+                                    Lit(" for the account.")])
+                    if family is DetectorFamily.FLOOR_LOW_BID:
+                        comp = next((self.fact(i) for i in cand.peer_fact_ids
+                                     if self.fact(i).comparison and self.fact(i).value is not None
+                                     and self.fact(i).value < 1), None)
+                        if comp:
+                            own = self.fact(comp.comparison.left_fact_id)
+                            peer = self.fact(comp.comparison.right_fact_id)
+                            out.append([Lit(_sentence(_metric_name(own)) + ": "), *self.value(own),
+                                        Lit(" versus "), *self.value(peer, RenderRole.BASELINE),
+                                        Lit(" for "), *self.baseline_label(peer, comp), Lit(".")])
+                return out
         if target:
             baseline = self.planner.accounts.get((r.period_id, metric))
+            cand = self.b.candidates.get(r.candidate_id)
+            comparison = None
+            if cand and family is DetectorFamily.COMBINATION_OUTLIER:
+                comparison = next((self.fact(i) for i in cand.trigger_fact_ids
+                                   if self.fact(i).comparison and self.fact(i).metric is metric), None)
+                if comparison:
+                    baseline = self.fact(comparison.comparison.right_fact_id)
             line = [Lit(f"{_sentence(_metric_name(target))}: "), *self.value(target)]
             if baseline:
                 line += [Lit(" versus "), *self.value(baseline, RenderRole.BASELINE),
-                         Lit(" for the account")]
+                         Lit(" for "), *(self.baseline_label(baseline, comparison)
+                                         if comparison else [Lit("the account")])]
             line += [Lit("; very little revenue for the request load.") if family is DetectorFamily.WASTED_REQUESTS else Lit(".")]
-            if family in (DetectorFamily.FLOOR_HIGH_BID, DetectorFamily.FLOOR_LOW_BID):
-                floor = self.planner.metric(r, MetricKey.RESPONSE_WEIGHTED_FLOOR)
-                if floor:
-                    line += [Lit(" Response-weighted floor: "), *self.value(floor),
-                             Lit("; averages alone do not prove a floor effect.")]
             out.append(line)
-        for statement in r.observation_statements:
-            if len(out) >= 3:
-                break
-            if target and self.fact(statement.fact_ids[0]).metric is metric:
-                continue
-            out.append(self.observation(statement))
+        if not out:
+            for statement in r.observation_statements:
+                if statement.template_id in (ObservationTemplateId.METRIC_VS_BASELINE,
+                                              ObservationTemplateId.TREND):
+                    out.append(self.observation(statement))
+                    break
         return out
 
     def observation(self, statement: ObservationStatement) -> Line:
@@ -571,9 +613,8 @@ class _Builder:
             return [Lit("the whole account")]
         detail = comp.comparison
         if detail is not None and detail.matching_keys:
-            return [Lit("matched peers (same "
-                        + ", ".join(T.DIMENSION_LABELS[k].lower() for k in detail.matching_keys)
-                        + ")")]
+            return [Lit("other traffic with the same "
+                        + ", ".join(T.DIMENSION_LABELS[k].lower() for k in detail.matching_keys))]
         return self.segment(baseline.segment.segment_id)
 
     def comparison(self, r: CandidateRecommendation) -> tuple[Fact, Fact] | None:
@@ -588,78 +629,28 @@ class _Builder:
 
     def estimate(self, r: CandidateRecommendation) -> tuple[Line, bool]:
         plan = self.plans[r.candidate_id]
-        if plan.scenario_id:
-            line = self.estimate_line(self.scenario(plan.scenario_id))
-            if line is not None:
-                return line, True
+        if plan.mode == "risk":
+            return [Lit("Not estimated: needs avoidable processing costs or a measured redirect gain; throttling puts existing revenue at risk.")], False
         if not plan.results:
-            return [Lit("Not estimable: " + plan.reason + ".")], False
-        result = plan.results[0]
+            return [Lit("Not estimated: needs " + plan.reason.removeprefix("missing ") + ".")], False
+        profits = [f for f in plan.results if f.metric is MetricKey.PROFIT]
+        if not profits:
+            return [Lit("Not estimated: needs measured incremental profit.")], False
+        result = profits[-1]
+        if result.value <= 0:
+            return [Lit("Not estimated: needs evidence of a positive profit improvement.")], False
         if result.fact_id not in self.b.facts:
             raise RenderError("planning estimates must be registered before rendering")
-        descriptions = {
-            "risk": " revenue at risk, not savings; avoidable processing cost is not provided",
-            "scale": " extra profit before displaced traffic",
-            "margin": " extra profit if the slice reached account margin",
-            "floor": " extra revenue sensitivity on delivered wins, not a predicted floor effect",
-            "delivery": " extra revenue if impressions per win reached the comparison rate; counter check required",
-            "sensitivity": " extra revenue sensitivity, not an identified intervention effect",
-        }
-        a = plan.assumption
-        amount = self.value(result, RenderRole.SCENARIO)
-        assumption_value = [Val(format_value(a.value, a.unit), a.assumption_id, RenderRole.ASSUMPTION)]
-        if plan.mode == "floor":
-            amount += [Lit(" to "), *self.value(plan.results[1], RenderRole.SCENARIO)]
-            assumption_value += [Lit(" to "), Val(format_value(a.bounds.maximum, a.unit),
-                                                   a.assumption_id, RenderRole.ASSUMPTION)]
-        return [Lit("About "), *amount,
-                Lit(descriptions[plan.mode] + T.OVER_PERIOD + ". Assumes "),
-                *assumption_value,
-                Lit(" — " + a.label.lower() + ". " + T.ESTIMATE_NOTE)], True
-
-    def estimate_line(self, s: Scenario) -> Line | None:
-        S = RenderRole.SCENARIO  # noqa: N806
-        results = [self.fact(i) for i in s.result_fact_ids]
-        for fact in results:
-            if fact.kind is not FactKind.SCENARIO:
-                raise RenderError(f"{fact.fact_id} is not a scenario fact")
-        dollars = {f.metric: f for f in results
-                   if f.unit is Unit.EXPORT_DOLLAR and f.value is not None}
-        head: Line
-        if s.template is ScenarioTemplate.THROTTLE:
-            at_risk = [(self.fact(i), t) for i, t in ((s.revenue_at_risk_fact_id, " revenue"),
-                                                      (s.profit_at_risk_fact_id, " profit")) if i]
-            at_risk = [(f, t) for f, t in at_risk if f.value is not None]
-            if not at_risk:
-                return None
-            parts = [[*self.value(f, S), Lit(t)] for f, t in at_risk]
-            head = [Lit(T.THROTTLE_NO_GAIN), *_join(parts, " and "), Lit(T.AT_RISK),
-                    Lit(T.OVER_PERIOD), Lit(".")]
-        elif MetricKey.PROFIT in dollars:
-            head = [Lit(T.GAIN_LEAD), *self.value(dollars[MetricKey.PROFIT], S),
-                    Lit(T.EXTRA_PROFIT)]
-            if MetricKey.REVENUE in dollars:
-                head += [Lit(" ("), *self.value(dollars[MetricKey.REVENUE], S),
-                         Lit(T.EXTRA_REVENUE + ")")]
-            head += [Lit(T.OVER_PERIOD), Lit(".")]
-        elif MetricKey.REVENUE in dollars:
-            head = [Lit(T.GAIN_LEAD), *self.value(dollars[MetricKey.REVENUE], S),
-                    Lit(T.EXTRA_REVENUE), Lit(T.OVER_PERIOD), Lit(".")]
-        else:
-            return None
-        return [*head, Lit(" "), *self.clause(s), Lit(T.ESTIMATE_NOTE)]
-
-    def clause(self, s: Scenario) -> Line:
-        if s.template not in T.ASSUMPTION_CLAUSES:
-            return []
-        key = PARAMETERS.get(s.template, (None,))[0]
-        chosen = [self.assumption(i) for i in s.assumption_ids]
-        a = next((x for x in chosen if x.parameter_key == key), chosen[0] if chosen else None)
-        if a is None:
-            return []
-        before, after = T.ASSUMPTION_CLAUSES[s.template]
-        return [Lit(before), Val(format_value(a.value, a.unit), a.assumption_id,
-                                 RenderRole.ASSUMPTION), Lit(after + " ")]
+        days = len(result.period.included_dates)
+        weekly = result.value * Decimal(7) / Decimal(days)
+        amount = Val(format_value(weekly, result.unit), result.fact_id, RenderRole.SCENARIO)
+        condition = {
+            "scale": "the planned extra traffic keeps this profit yield",
+            "scenario": "the planned extra traffic keeps this profit yield",
+            "margin": "the slice reaches the account margin at unchanged revenue",
+            "delivery": "delivery reaches the comparison rate at unchanged profit per impression",
+        }[plan.mode]
+        return [Lit("About "), amount, Lit(" extra profit per week if " + condition + ".")], True
 
     # Per-card details.
 
@@ -669,6 +660,9 @@ class _Builder:
         out: list[tuple[str, list[Line]]] = []
 
         proves: list[Line] = []
+        if any(self.planner.metric(r, m) and self.planner.metric(r, m).validity.status is ValidityStatus.TAINTED
+               for m in (MetricKey.REQUESTS, MetricKey.REVENUE, MetricKey.PROFIT)):
+            proves.append([Lit("Some historical inputs are flagged by quality checks; reconcile them before acting on the estimate.")])
         for fact_id in r.counter_evidence_fact_ids:
             proves.append([Lit("Counter-evidence: "), *self.metric_line(self.fact(fact_id))])
         if cand is not None:
@@ -756,6 +750,10 @@ class _Builder:
             + ([Lit(f" · {T.FAMILY_LABELS[cand.family]}")] if cand is not None else [])
             + ([Lit(" · found by the model, not a detector rule")]
                if r.origin == "model_proposed" else [])]
+        absorbed = self.card_merges.get(rec.recommendation_id, [])
+        if absorbed:
+            refs.append([Lit("Same traffic; collapsed duplicate findings "), *self.refs(absorbed),
+                         Lit(" into this simpler description.")])
         if r.overlap_group_ids:
             refs.append([Lit("Overlaps other recommendations in "), *self.refs(r.overlap_group_ids),
                          Lit("; their impacts are not additive.")])
@@ -765,7 +763,10 @@ class _Builder:
                          Lit("; shown separately here, so impacts must not be added.")])
         plan = self.plans[r.candidate_id]
         if plan.assumption:
-            refs.append([Lit("Planning assumption: "), self.ref(plan.assumption.assumption_id),
+            refs.append([Lit("Planning assumption: "),
+                         Val(format_value(plan.assumption.value, plan.assumption.unit),
+                             plan.assumption.assumption_id, RenderRole.ASSUMPTION),
+                         Lit(" — " + plan.assumption.label + ". "), self.ref(plan.assumption.assumption_id),
                          Lit("; estimate facts "), *self.refs([f.fact_id for f in plan.results]),
                          Lit("; historical inputs "),
                          *self.refs(plan.results[0].provenance.parent_fact_ids)])
@@ -774,6 +775,12 @@ class _Builder:
             refs.append([Lit("Estimate scenario: "), self.ref(plan.scenario_id),
                          Lit("; historical inputs "), *self.refs(scenario.historical_fact_ids),
                          Lit("; assumptions "), *self.refs(scenario.assumption_ids)])
+            for aid in scenario.assumption_ids:
+                a = self.assumption(aid)
+                refs.append([Lit(a.label + ": "),
+                             Val(format_value(a.value, a.unit), aid, RenderRole.ASSUMPTION)])
+        if plan.results:
+            refs.append([Lit("Weekly estimates rescale the observed period to seven days; they are conditional, not forecasts. Additional-traffic estimates exclude unknown displaced profit.")])
         out.append(("Confidence and references", refs))
         return out
 
@@ -887,10 +894,11 @@ class _Builder:
         selection_note = []
         if self.run.manifest.model_call_counts.get("exposure_selection"):
             selection_note = [[Lit(
-                "Final selection is by code: estimated dollar gain, then observation confidence; "
-                "risk-only estimates sort after gains. All validated findings are eligible, "
-                "including overlapping scopes; do not add their impacts. The highest-ranked "
-                "findings fill the short report; others remain in the audit."
+                "Final selection is by code: equivalent traffic is collapsed, with at most two "
+                "cards per supply. Available detector families, countries and sizes are covered "
+                "before filling remaining slots. Eligible findings precede exploratory ones, "
+                "ordered by estimated dollar gain. Unknown gains are not invented; unselected "
+                "findings and duplicate evidence remain in the audit. Do not add overlapping impacts."
             )]]
         out.append(("Method and limits", [
             *selection_note,
@@ -922,12 +930,13 @@ class _Builder:
     def unselected(self, ranked: list[ValidatedRecommendation]) -> list[Line]:
         shown = {r.recommendation_id for r in ranked}
         merged = {s for rid in shown for s in self.merged_sources(rid)}
+        merged.update(s for rid in shown for s in self.card_merges.get(rid, []))
         out: list[Line] = []
         for rec in self.run.recommendations:
             r = rec.recommendation
             if not _actionable(r) or rec.recommendation_id in shown | merged:
                 continue
-            out.append([Lit("Validated but not selected by the final ranking: "),
+            out.append([Lit("Validated but not selected for the short report: "),
                         *self.segment(r.segment_id), Lit(" "), self.ref(rec.recommendation_id)])
         return out
 

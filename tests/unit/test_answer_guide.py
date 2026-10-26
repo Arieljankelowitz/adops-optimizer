@@ -282,14 +282,19 @@ def test_scenario_shared_with_other_candidates_can_be_cited(bundle):
     declare a group without its candidate; the old rule also demanded every
     scenario group, so no answer could cite such a scenario.
     """
-    pack = next(
-        p
-        for p in bundle.packs.values()
-        for s in p.scenarios
-        if set(s.overlap_group_ids) - set(p.candidate.overlap_group_ids)
-    )
+    from contracts.runtime import ScenarioRegistry
+
+    # Exact-scope aliases are now collapsed before packing. Construct the
+    # former shared-scenario shape explicitly so the validator regression
+    # remains covered without depending on duplicate shortlist entries.
+    pack = next(p for p in bundle.packs.values() if p.scenarios and any(
+        p.candidate.candidate_id not in g.candidate_ids for g in bundle.overlap_groups.values()))
     scenario, c = pack.scenarios[0], pack.candidate
-    foreign = sorted(set(scenario.overlap_group_ids) - set(c.overlap_group_ids))
+    foreign = [next(g.overlap_group_id for g in bundle.overlap_groups.values()
+                    if c.candidate_id not in g.candidate_ids)]
+    scenario = scenario.model_copy(update={"overlap_group_ids": [*scenario.overlap_group_ids, *foreign]})
+    bundle = replace(bundle, scenarios=ScenarioRegistry(bundle.run_namespace, [
+        scenario if s.scenario_id == scenario.scenario_id else s for s in bundle.scenarios.values()]))
     assert all(c.candidate_id not in bundle.overlap_groups[g].candidate_ids for g in foreign)
     rec = guided(pack)
     assert rec.scenario_ids == [scenario.scenario_id]

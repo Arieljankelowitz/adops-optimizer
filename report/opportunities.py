@@ -51,16 +51,15 @@ class Opportunity:
         if self.mode == "risk":
             return D(0)
         profit = [
-            f.value
-            for f in self.results
+            f for f in self.results
             if f.metric is M.PROFIT and f.value is not None
         ]
-        dollars = [
-            f.value
-            for f in self.results
-            if f.unit is Unit.EXPORT_DOLLAR and f.value is not None
-        ]
-        return profit[-1] if profit else max(dollars or [D(0)])
+        # Cards display weekly profit, so differing observed periods must rank
+        # on that same basis. Revenue-only results are not profit opportunity.
+        if not profit:
+            return D(0)
+        fact = profit[-1]
+        return max(D(0), fact.value) * D(7) / D(len(fact.period.included_dates))
 
 
 class Opportunities:
@@ -127,7 +126,12 @@ class Opportunities:
             and s.template == templates.get(family)
         ]
         for s in selected:
-            if s.template is ScenarioTemplate.NOT_IDENTIFIABLE:
+            # Fixed margin/rendering sensitivities are not identified upside.
+            # Use observed account/peer comparisons below instead; floor effects
+            # require experiment data, never an arbitrary percentage uplift.
+            if s.template not in (
+                ScenarioTemplate.ADDITIONAL_ELIGIBLE_REQUESTS, ScenarioTemplate.THROTTLE,
+            ) or s.template != templates.get(family):
                 continue
             ids = (
                 [s.revenue_at_risk_fact_id]
@@ -165,7 +169,14 @@ class Opportunities:
         )
         reason = "missing requests or observed profit yield"
         if family in (F.SCALE_WINNER, F.COMBINATION_OUTLIER):
-            if req and ppm:
+            if family is F.COMBINATION_OUTLIER:
+                cand = self.b.candidates.get(r.candidate_id)
+                comparisons = [self.b.facts[i] for i in cand.trigger_fact_ids
+                               if self.b.facts[i].comparison] if cand else []
+                if not comparisons or not all(f.comparison.ratio is not None and f.comparison.ratio > 1
+                                               for f in comparisons):
+                    return Opportunity(family, reason="a tested improvement for this low-yield combination")
+            if req and ppm and ppm.value > 0:
                 parents, value, metric, mode = (
                     [req, ppm],
                     req.value * fraction * ppm.value / D(1000000),
@@ -195,22 +206,7 @@ class Opportunities:
                     "margin",
                 )
         elif family in (F.FLOOR_HIGH_BID, F.FLOOR_LOW_BID):
-            wins, imp = self.metric(r, M.WINS), self.metric(r, M.IMPRESSIONS)
-            reason = "missing wins, impressions or realized revenue"
-            if rev and wins and imp and imp.value > 0:
-                # No unconfirmed floor-price scale is used as dollars.
-                fraction, label = (
-                    D("0.05"),
-                    "Realized revenue per delivered win rises modestly at unchanged volume",
-                )
-                parents = [rev, wins, imp]
-                value = (
-                    max(D(0), rev.value)
-                    / imp.value
-                    * min(wins.value, imp.value)
-                    * fraction
-                )
-                mode = "floor"
+            reason = "bid distributions and a controlled floor-test result"
         elif family is F.WINS_IMPRESSIONS_DISCREPANCY:
             rate = self.metric(r, M.IMPRESSION_TO_WIN_RATE)
             baseline = self.accounts.get((r.period_id, M.IMPRESSION_TO_WIN_RATE))
@@ -221,31 +217,30 @@ class Opportunities:
                     if peer.comparison and peer.metric is M.IMPRESSION_TO_WIN_RATE:
                         baseline = self.b.facts[peer.comparison.right_fact_id]
                         break
-            reason = "missing realized revenue or comparable impressions-per-win rate"
+            reason = "missing realized profit or comparable impressions-per-win rate"
             if (
-                rev
+                profit
                 and rate
                 and baseline
                 and rate.value > 0
                 and baseline.value is not None
             ):
                 fraction = max(D(0), baseline.value / rate.value - 1)
-                label = "Impressions per win reaches the comparison rate at unchanged revenue per impression; counter check required"
-                parents, value, mode = (
-                    [rev, rate, baseline],
-                    max(D(0), rev.value) * fraction,
+                label = "Impressions per win reaches the comparison rate at unchanged profit per impression; counter check required"
+                parents, value, metric, mode = (
+                    [profit, rate, baseline],
+                    max(D(0), profit.value) * fraction,
+                    M.PROFIT,
                     "delivery",
                 )
-        elif rev:
-            fraction, label = (
-                D("0.05"),
-                "Illustrative revenue improvement at unchanged traffic, not an identified intervention effect",
-            )
-            parents, value, mode = [rev], max(D(0), rev.value) * fraction, "sensitivity"
+        else:
+            reason = "a measured intervention result"
         if value is None:
             return Opportunity(family, reason=reason)
         ns = self.b.run_namespace
         identity = {"planning_recommendation": rec.recommendation_id, "mode": mode}
+        if mode == "delivery":
+            identity["arithmetic_version"] = 2  # old cached results sized revenue, not profit
         assumption = Assumption(
             assumption_id=make_id(IdPrefix.ASSUMPTION, ns, identity),
             run_namespace=ns,
@@ -254,7 +249,7 @@ class Opportunities:
             value=fraction,
             unit=Unit.FRACTION,
             bounds=AssumptionBounds(
-                minimum=fraction, maximum=fraction * 2 if mode == "floor" else fraction
+                minimum=fraction, maximum=fraction
             ),
             rationale="Code-owned planning sensitivity, not a forecast or a model claim.",
             selector=AssumptionSelector.DEFAULT_TEST_TEMPLATE,
@@ -279,7 +274,7 @@ class Opportunities:
             ),
             provenance=anchor.provenance.model_copy(
                 update={
-                    "formula_id": f"report_{mode}_v1",
+                    "formula_id": f"report_{mode}_v2" if mode == "delivery" else f"report_{mode}_v1",
                     "parent_fact_ids": [p.fact_id for p in parents],
                     "weighting": Weighting.NOT_APPLICABLE,
                     "quality_issue_ids": sorted(
@@ -290,18 +285,6 @@ class Opportunities:
         )
         # Read back registered records on render; prepare_estimates owns registration.
         results = [self.b.facts.get(result.fact_id) or result]
-        if mode == "floor":
-            upper_id = make_id(IdPrefix.FACT, ns, {**identity, "bound": "upper"})
-            upper = result.model_copy(
-                update={
-                    "fact_id": upper_id,
-                    "value": value * 2,
-                    "provenance": result.provenance.model_copy(
-                        update={"formula_id": "report_floor_upper_v1"}
-                    ),
-                }
-            )
-            results.append(self.b.facts.get(upper_id) or upper)
         return Opportunity(
             family,
             tuple(results),

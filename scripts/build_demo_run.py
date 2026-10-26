@@ -241,24 +241,24 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
     D = Dimension
     account = b.segment({})
     account_sens = b.segment({}, cohort="excluding_flagged_days")
-    s_scale = b.segment({D.SUPPLY_ID: "41022", D.COUNTRY: "DE", D.SIZE: "300x250",
+    s_scale = b.segment({D.SUPPLY_ID: "41022", D.COUNTRY: "DEU", D.SIZE: "300x250",
                          D.PLACEMENT_TYPE: "Banner", D.DEVICE_TYPE: "Mobile"})
-    s_peer = b.segment({D.SUPPLY_ID: "41007", D.COUNTRY: "DE", D.SIZE: "300x250",
+    s_peer = b.segment({D.SUPPLY_ID: "41007", D.COUNTRY: "DEU", D.SIZE: "300x250",
                         D.PLACEMENT_TYPE: "Banner", D.DEVICE_TYPE: "Mobile"})
-    s_parent = b.segment({D.SUPPLY_ID: "41022", D.COUNTRY: "DE"})
-    s_waste = b.segment({D.SUPPLY_ID: "52310", D.COUNTRY: "US"})
+    s_parent = b.segment({D.SUPPLY_ID: "41022", D.COUNTRY: "DEU"})
+    s_waste = b.segment({D.SUPPLY_ID: "52310", D.COUNTRY: "USA"})
     s_margin = b.segment({D.SUPPLY_ID: "60894"})
-    s_wins = b.segment({D.SUPPLY_ID: "73005", D.COUNTRY: "BR", D.SIZE: "320x50",
+    s_wins = b.segment({D.SUPPLY_ID: "73005", D.COUNTRY: "BRA", D.SIZE: "320x50",
                         D.PLACEMENT_TYPE: "Video", D.DEVICE_TYPE: "Mobile"})
-    s_trend = b.segment({D.SUPPLY_ID: "41007", D.COUNTRY: "GB"})
-    s_spiky = b.segment({D.SUPPLY_ID: "88140", D.COUNTRY: "IN", D.SIZE: "300x600",
+    s_trend = b.segment({D.SUPPLY_ID: "41007", D.COUNTRY: "GBR"})
+    s_spiky = b.segment({D.SUPPLY_ID: "88140", D.COUNTRY: "IND", D.SIZE: "300x600",
                          D.PLACEMENT_TYPE: "Banner", D.DEVICE_TYPE: "Desktop"})
     s_floor_low = b.segment({D.SUPPLY_ID: "52311", D.DEVICE_TYPE: "Tablet"})
-    s_floor_high = b.segment({D.SUPPLY_ID: "07731", D.COUNTRY: "US", D.SIZE: "728x90"})
+    s_floor_high = b.segment({D.SUPPLY_ID: "07731", D.COUNTRY: "USA", D.SIZE: "728x90"})
     s_inject = b.segment({D.SUPPLY_ID: "60894", D.COUNTRY: INJECTION_LABEL})
     s_budget = b.segment({D.SUPPLY_ID: "73005", D.DEVICE_TYPE: "Desktop"})
-    s_other = b.segment({D.SUPPLY_ID: "73005", D.COUNTRY: "BR", D.SIZE: "other"})
-    s_explore = b.segment({D.SUPPLY_ID: "90417", D.COUNTRY: "FR", D.DEVICE_TYPE: "Mobile"})
+    s_other = b.segment({D.SUPPLY_ID: "73005", D.COUNTRY: "BRA", D.SIZE: "other"})
+    s_explore = b.segment({D.SUPPLY_ID: "90417", D.COUNTRY: "FRA", D.DEVICE_TYPE: "Mobile"})
 
     # Quality issue IDs first; facts cite them in provenance.
     q = {name: b.id(IdPrefix.QUALITY_ISSUE, name) for name in (

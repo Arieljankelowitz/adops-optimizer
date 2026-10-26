@@ -296,7 +296,10 @@ def test_country_restriction_only_hits_matching_country() -> None:
 
 
 def test_parent_duplicates_are_rejected_with_reason_and_overlaps_are_exact() -> None:
-    store, quality, det = _detect(background() + slice_rows(T, 3_000_000, "30.00", margin="0.40"))
+    sibling = ("777", "GB", "728x90", "Video", "Mobile")
+    rows = background() + slice_rows(T, 3_000_000, "30.00", margin="0.40")
+    rows += slice_rows(sibling, 500_000, "5.00", margin="0.40")
+    store, quality, det = _detect(rows)
     scale = [c for c in det.candidates if c.family is F.SCALE_WINNER]
     rejected = [c for c in scale if c.eligibility is E.REJECTED]
     assert rejected and all(c.rejection_reason and "C_" in c.rejection_reason for c in rejected)
@@ -308,6 +311,22 @@ def test_parent_duplicates_are_rejected_with_reason_and_overlaps_are_exact() -> 
         expected = combined_stats(store, full_period(store), union)["requests"]
         assert shared.value == expected
         assert group.overlap_group_id in a.overlap_group_ids and group.overlap_group_id in b.overlap_group_ids
+
+
+def test_identical_supply_banner_mobile_aliases_are_collapsed_before_packing() -> None:
+    from contracts.config import EvidenceConfig
+    from pipeline.evidence import build_evidence
+
+    store, quality, det = _detect(background() + slice_rows(T, 3_000_000, "30.00", margin="0.40"))
+    bundle = build_evidence(store, quality, list(det.candidates), EvidenceConfig())
+    packs = [p for p in bundle.packs.values()
+             if store.segments[p.candidate.segment_id].filters.get(FIVE[0]) == "777"]
+    assert len(packs) == 1
+    assert dict(store.segments[packs[0].candidate.segment_id].filters) == {FIVE[0]: "777"}
+    absorbed = [c for c in bundle.candidates.values()
+                if c.rejection_reason and "same traffic as" in c.rejection_reason]
+    assert absorbed and all(c.eligibility is E.REJECTED for c in absorbed)
+    assert all(c.trigger_fact_ids for c in absorbed)  # the merged evidence survives
 
 
 def test_evidence_is_closed_complete_and_rebuildable() -> None:

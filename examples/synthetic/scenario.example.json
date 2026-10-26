@@ -1,13 +1,13 @@
 {
   "assumption_ids": [
-    "A_17d2f524b06a7752"
+    "A_6ebd24b0881be94d"
   ],
   "conditional": true,
   "displaced_cost_treatment": "unknown_disclosed",
   "formula_id": "additional_eligible_requests_v1",
   "historical_fact_ids": [
-    "F_9dd42793b9aad070",
-    "F_fee9de502787f26a"
+    "F_85b4a09507f402c2",
+    "F_7b5c44b1ceac5ac8"
   ],
   "horizon": "observed_period_comparable_exposure",
   "limitation_codes": [
@@ -15,18 +15,18 @@
     "displaced_profit_unknown"
   ],
   "overlap_group_ids": [],
-  "period_id": "P_cbbcfe082f486693",
+  "period_id": "P_7fa86fc83bc2aea8",
   "prerequisite_codes": [
     "confirm_eligible_inventory",
     "confirm_capacity"
   ],
   "profit_at_risk_fact_id": null,
   "result_fact_ids": [
-    "F_ce5cf35f3536c0a0"
+    "F_41b4bf60aecc3dad"
   ],
   "revenue_at_risk_fact_id": null,
-  "run_namespace": "N_135716e9592addcf",
-  "scenario_id": "S_777b78ed364aa6bd",
-  "segment_id": "G_521f9b52972ceb22",
+  "run_namespace": "N_c69db344096306ec",
+  "scenario_id": "S_e632d697e6ec77d5",
+  "segment_id": "G_8201414ec0f69af1",
   "template": "additional_eligible_requests"
 }

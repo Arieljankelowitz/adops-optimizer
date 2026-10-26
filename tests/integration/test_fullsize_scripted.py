@@ -15,11 +15,11 @@ from dataclasses import replace
 import pytest
 
 from contracts.config import RunConfig
-from contracts.enums import AnalysisStatus, Decision
+from contracts.enums import AnalysisStatus, Decision, Dimension, MetricKey, QualityRuleId
 from llm.profiles import load_profile
 from llm.tokens import estimate_prompt_tokens
 from report.opportunities import Opportunities
-from report.summary import ShortReport, audit_summary
+from report.summary import ShortReport, _Builder, audit_summary
 from runner import default_stages, execute
 from scripts.generate_fullsize import write
 from tests.support.scripted_model import ScriptedModel
@@ -67,20 +67,53 @@ def _check(outcome, model, events, min_validated):
     assert not any(r.response_schema_name == "recommendation_ranking" for r in model.requests)
     md = outcome.report.markdown
     assert "Final selection is by code" in md
-    assert md.count("- **Opportunity:**") == min(10, len(actionable))
-    assert outcome.html.count('<article class="card">') == min(10, len(actionable))
+    shown = _Builder(run).ordered_recommendations()
+    assert 5 <= len(shown) <= 10
+    assert md.count("- **Opportunity:**") == len(shown)
+    assert outcome.html.count('<article class="card">') == len(shown)
+    _distinct_and_varied(run, shown)
     estimates = [line for line in md.splitlines() if line.startswith("- **Estimated opportunity")]
-    assert all("$" in line and "Assumes" in line for line in estimates)
+    assert all(("$" in line and "extra profit per week if" in line
+                or "Not estimated: needs" in line) and "Assumes" not in line
+               and "%" not in line for line in estimates)
     assert "Investigate, then investigate" not in md
     assert audit_summary(ShortReport(outcome.report, outcome.html), run).ok
     planner = Opportunities(run)
-    shown = sorted(actionable, key=lambda r: md.find(r.recommendation_id)
-                   if r.recommendation_id in md.split("## Appendix")[0] else len(md))[:10]
-    scores = [planner.plan(r).score for r in shown]
-    assert scores == sorted(scores, reverse=True)
+    scores = [(bundle.candidates[r.recommendation.candidate_id].eligibility.value != "eligible",
+               -planner.plan(r).score) for r in shown]
+    assert scores == sorted(scores)
     # Every request fits the profile's prompt window.
     limit = load_profile().max_prompt_tokens
     assert max(estimate_prompt_tokens(r.messages) for r in model.requests) <= limit
+
+
+def _distinct_and_varied(run, shown):
+    planner = Opportunities(run)
+    families, dims, signatures, hashes, supplies = set(), set(), set(), set(), Counter()
+    for rec in shown:
+        r = rec.recommendation
+        segment = run.bundle.segments[r.segment_id]
+        families.add(planner.family(r))
+        dims.update(segment.filters)
+        if Dimension.SUPPLY_ID in segment.filters:
+            supplies[segment.filters[Dimension.SUPPLY_ID]] += 1
+        facts = [planner.metric(r, m) for m in
+                 (MetricKey.REQUESTS, MetricKey.REVENUE, MetricKey.PROFIT)]
+        signature = tuple(f.value for f in facts)
+        row_hash = facts[0].provenance.source_row_set_hash
+        assert signature not in signatures and row_hash not in hashes
+        signatures.add(signature)
+        hashes.add(row_hash)
+    assert max(supplies.values()) <= 2
+    assert len(families) >= 4
+    assert {Dimension.COUNTRY, Dimension.SIZE} <= dims
+    broad = [run.bundle.segments[r.recommendation.segment_id] for r in shown
+             if len(run.bundle.segments[r.recommendation.segment_id].filters) <= 2]
+    assert any(Dimension.COUNTRY in s.filters for s in broad)
+    assert any(Dimension.SIZE in s.filters for s in broad)
+    dq10 = [i for i in run.bundle.quality.issues if i.rule_id is QualityRuleId.DQ10]
+    # Only planted '-' labels, never alpha-3 countries, are unverified.
+    assert not any(i.message_template_id == 'DQ10_unverified_country' for i in dq10)
 
 
 def test_existing_small_fixture_report_with_a_scripted_model():
@@ -92,7 +125,8 @@ def test_existing_small_fixture_report_with_a_scripted_model():
     assert audit_summary(ShortReport(outcome.report, outcome.html), outcome.run).ok
     estimates = [line for line in outcome.report.markdown.splitlines()
                  if line.startswith("- **Estimated opportunity")]
-    assert all("$" in line and "Assumes" in line for line in estimates)
+    assert all("Not estimated: needs" in line or "extra profit per week if" in line
+               for line in estimates)
 
 
 def test_medium_export_runs_clean_with_a_scripted_model(tmp_path):

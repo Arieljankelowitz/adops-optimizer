@@ -1,7 +1,7 @@
 [
   {
     "comparison": null,
-    "fact_id": "F_9c075a1f9f8f8979",
+    "fact_id": "F_1fb4fb2b4425309f",
     "kind": "measured",
     "metric": "revenue",
     "period": {
@@ -16,7 +16,7 @@
         "2031-03-08",
         "2031-03-09"
       ],
-      "period_id": "P_cbbcfe082f486693",
+      "period_id": "P_7fa86fc83bc2aea8",
       "start": "2031-03-03"
     },
     "provenance": {
@@ -36,14 +36,14 @@
       "source_row_set_hash": "aab2446bd752912951fb24c5a0906a86d3b1ca13f62877bab23707b1f43776b9",
       "weighting": "sum"
     },
-    "run_namespace": "N_135716e9592addcf",
+    "run_namespace": "N_c69db344096306ec",
     "segment": {
       "cohort_id": "full_input",
       "filters": {
         "country": "DE",
         "supply_id": "41022"
       },
-      "segment_id": "G_521f9b52972ceb22"
+      "segment_id": "G_8201414ec0f69af1"
     },
     "unit": "export_dollar",
     "validity": {
@@ -54,7 +54,7 @@
   },
   {
     "comparison": null,
-    "fact_id": "F_9dd42793b9aad070",
+    "fact_id": "F_85b4a09507f402c2",
     "kind": "measured",
     "metric": "requests",
     "period": {
@@ -69,7 +69,7 @@
         "2031-03-08",
         "2031-03-09"
       ],
-      "period_id": "P_cbbcfe082f486693",
+      "period_id": "P_7fa86fc83bc2aea8",
       "start": "2031-03-03"
     },
     "provenance": {
@@ -89,14 +89,14 @@
       "source_row_set_hash": "aab2446bd752912951fb24c5a0906a86d3b1ca13f62877bab23707b1f43776b9",
       "weighting": "sum"
     },
-    "run_namespace": "N_135716e9592addcf",
+    "run_namespace": "N_c69db344096306ec",
     "segment": {
       "cohort_id": "full_input",
       "filters": {
         "country": "DE",
         "supply_id": "41022"
       },
-      "segment_id": "G_521f9b52972ceb22"
+      "segment_id": "G_8201414ec0f69af1"
     },
     "unit": "count",
     "validity": {
@@ -107,7 +107,7 @@
   },
   {
     "comparison": null,
-    "fact_id": "F_fee9de502787f26a",
+    "fact_id": "F_7b5c44b1ceac5ac8",
     "kind": "calculated",
     "metric": "revenue_per_million_requests",
     "period": {
@@ -122,7 +122,7 @@
         "2031-03-08",
         "2031-03-09"
       ],
-      "period_id": "P_cbbcfe082f486693",
+      "period_id": "P_7fa86fc83bc2aea8",
       "start": "2031-03-03"
     },
     "provenance": {
@@ -133,11 +133,11 @@
       "formula_id": "revenue_per_million_requests_v1",
       "input_sha256": "c9d814bb78a612dd957eb2c63024aa13a6d11e7e96fa0c2ecf745fcb22731532",
       "parent_fact_ids": [
-        "F_9c075a1f9f8f8979",
-        "F_9dd42793b9aad070"
+        "F_1fb4fb2b4425309f",
+        "F_85b4a09507f402c2"
       ],
       "quality_issue_ids": [
-        "Q_df526f3374cf0cab"
+        "Q_bf90fa190028a261"
       ],
       "schema_version": "1",
       "source_columns": [
@@ -148,14 +148,14 @@
       "source_row_set_hash": "aab2446bd752912951fb24c5a0906a86d3b1ca13f62877bab23707b1f43776b9",
       "weighting": "ratio_of_sums"
     },
-    "run_namespace": "N_135716e9592addcf",
+    "run_namespace": "N_c69db344096306ec",
     "segment": {
       "cohort_id": "full_input",
       "filters": {
         "country": "DE",
         "supply_id": "41022"
       },
-      "segment_id": "G_521f9b52972ceb22"
+      "segment_id": "G_8201414ec0f69af1"
     },
     "unit": "export_dollar_per_million_requests",
     "validity": {
@@ -166,7 +166,7 @@
   },
   {
     "comparison": null,
-    "fact_id": "F_66bc68febce01973",
+    "fact_id": "F_82db0aaaf5dfe0a8",
     "kind": "calculated",
     "metric": "revenue_per_million_requests",
     "period": {
@@ -181,7 +181,7 @@
         "2031-03-08",
         "2031-03-09"
       ],
-      "period_id": "P_cbbcfe082f486693",
+      "period_id": "P_7fa86fc83bc2aea8",
       "start": "2031-03-03"
     },
     "provenance": {
@@ -189,8 +189,8 @@
       "formula_id": "revenue_per_million_requests_v1",
       "input_sha256": "c9d814bb78a612dd957eb2c63024aa13a6d11e7e96fa0c2ecf745fcb22731532",
       "parent_fact_ids": [
-        "F_1718a177dbd4be1f",
-        "F_7145e9fe6a40ad03"
+        "F_169354f3e1b8ecda",
+        "F_ea1a804722ba2533"
       ],
       "quality_issue_ids": [],
       "schema_version": "1",
@@ -202,11 +202,11 @@
       "source_row_set_hash": "aab2446bd752912951fb24c5a0906a86d3b1ca13f62877bab23707b1f43776b9",
       "weighting": "ratio_of_sums"
     },
-    "run_namespace": "N_135716e9592addcf",
+    "run_namespace": "N_c69db344096306ec",
     "segment": {
       "cohort_id": "full_input",
       "filters": {},
-      "segment_id": "G_0e9b2f6200919217"
+      "segment_id": "G_a2b950540e88e7c7"
     },
     "unit": "export_dollar_per_million_requests",
     "validity": {
@@ -219,13 +219,13 @@
     "comparison": {
       "difference": "496.77",
       "difference_unit": "export_dollar_per_million_requests",
-      "left_fact_id": "F_fee9de502787f26a",
+      "left_fact_id": "F_7b5c44b1ceac5ac8",
       "matching_keys": [],
       "ratio": "9.10",
       "relation": "greater",
-      "right_fact_id": "F_66bc68febce01973"
+      "right_fact_id": "F_82db0aaaf5dfe0a8"
     },
-    "fact_id": "F_5c49352bf5e6ebea",
+    "fact_id": "F_650c9771892086eb",
     "kind": "comparison",
     "metric": "revenue_per_million_requests",
     "period": {
@@ -240,7 +240,7 @@
         "2031-03-08",
         "2031-03-09"
       ],
-      "period_id": "P_cbbcfe082f486693",
+      "period_id": "P_7fa86fc83bc2aea8",
       "start": "2031-03-03"
     },
     "provenance": {
@@ -251,8 +251,8 @@
       "formula_id": "ratio_comparison_v1",
       "input_sha256": "c9d814bb78a612dd957eb2c63024aa13a6d11e7e96fa0c2ecf745fcb22731532",
       "parent_fact_ids": [
-        "F_fee9de502787f26a",
-        "F_66bc68febce01973"
+        "F_7b5c44b1ceac5ac8",
+        "F_82db0aaaf5dfe0a8"
       ],
       "quality_issue_ids": [],
       "schema_version": "1",
@@ -261,14 +261,14 @@
       "source_row_set_hash": "aab2446bd752912951fb24c5a0906a86d3b1ca13f62877bab23707b1f43776b9",
       "weighting": "not_applicable"
     },
-    "run_namespace": "N_135716e9592addcf",
+    "run_namespace": "N_c69db344096306ec",
     "segment": {
       "cohort_id": "full_input",
       "filters": {
         "country": "DE",
         "supply_id": "41022"
       },
-      "segment_id": "G_521f9b52972ceb22"
+      "segment_id": "G_8201414ec0f69af1"
     },
     "unit": "ratio",
     "validity": {
@@ -279,7 +279,7 @@
   },
   {
     "comparison": null,
-    "fact_id": "F_9ef3fcc58a2168d0",
+    "fact_id": "F_840df7888b3ff003",
     "kind": "calculated",
     "metric": "response_rate",
     "period": {
@@ -294,7 +294,7 @@
         "2031-03-08",
         "2031-03-09"
       ],
-      "period_id": "P_cbbcfe082f486693",
+      "period_id": "P_7fa86fc83bc2aea8",
       "start": "2031-03-03"
     },
     "provenance": {
@@ -305,8 +305,8 @@
       "formula_id": "response_rate_v1",
       "input_sha256": "c9d814bb78a612dd957eb2c63024aa13a6d11e7e96fa0c2ecf745fcb22731532",
       "parent_fact_ids": [
-        "F_63cdd2f4c89a9264",
-        "F_9dd42793b9aad070"
+        "F_513279efb5770d4a",
+        "F_85b4a09507f402c2"
       ],
       "quality_issue_ids": [],
       "schema_version": "1",
@@ -318,14 +318,14 @@
       "source_row_set_hash": "aab2446bd752912951fb24c5a0906a86d3b1ca13f62877bab23707b1f43776b9",
       "weighting": "ratio_of_sums"
     },
-    "run_namespace": "N_135716e9592addcf",
+    "run_namespace": "N_c69db344096306ec",
     "segment": {
       "cohort_id": "full_input",
       "filters": {
         "country": "DE",
         "supply_id": "41022"
       },
-      "segment_id": "G_521f9b52972ceb22"
+      "segment_id": "G_8201414ec0f69af1"
     },
     "unit": "fraction",
     "validity": {

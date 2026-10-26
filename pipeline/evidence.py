@@ -56,7 +56,12 @@ from contracts.runtime import (
 )
 from contracts.templates import ObservationTemplateId as Template
 from contracts.templates import TestTemplateId as Test
-from pipeline.detectors import DIMENSION_BLOCKERS, FAMILY_BLOCKERS, candidate_evidence
+from pipeline.detectors import (
+    DIMENSION_BLOCKERS,
+    FAMILY_BLOCKERS,
+    candidate_evidence,
+    opportunity_score,
+)
 from pipeline.metrics import (
     ADDITIVE,
     FUNNEL_METRICS,
@@ -67,6 +72,7 @@ from pipeline.metrics import (
     stats_row,
 )
 from pipeline.scenarios import PARAMETERS, REQUIRED_METRICS, evaluate_scenarios
+from pipeline.shortlist import Lead, collapse, select, total_signature
 
 TESTS = {
     DetectorFamily.SCALE_WINNER: Test.MATCHED_ALLOCATION_HOLDOUT,
@@ -762,11 +768,38 @@ def build_evidence_bounded(
         enriched.append(
             candidate.model_copy(update={"quality_issue_ids": issue_ids}, deep=True)
         )
-    chosen = [c for c in enriched if c.eligibility is not EligibilityStatus.REJECTED]
+    by_id = {c.candidate_id: c for c in enriched}
+    leads = []
+    account_rows = {r["period_id"]: r for r in metrics.aggregates[
+        metrics.aggregates["level"] == "account"
+    ].to_dict("records") if r["cohort_id"] == "full_input"}
+    for c in enriched:
+        if c.eligibility is EligibilityStatus.REJECTED:
+            continue
+        row = stats_row(metrics, c.segment_id, c.period_id)
+        account = account_rows[c.period_id]
+        leads.append(Lead(
+            c.candidate_id, c.family, metrics.segments[c.segment_id].filters,
+            c.period_id, row["row_set_hash"],
+            total_signature(row["requests"], row["revenue"], row["profit"]),
+            opportunity_score(c.family, row, account), c.eligibility is EligibilityStatus.ELIGIBLE,
+        ))
+    distinct, merged = collapse(leads)
+    absorbed = {source: target for target, sources in merged.items() for source in sources}
+    enriched = [c.model_copy(update={
+        "eligibility": EligibilityStatus.REJECTED,
+        "rejection_reason": f"same traffic as {absorbed[c.candidate_id]}; merged into the simpler finding",
+    }) if c.candidate_id in absorbed else c for c in enriched]
     cap = config.max_candidates
     if len(metrics.segments) > config.large_export_segments:
         cap = min(cap, config.large_export_max_candidates)
-    chosen = [] if quality.has_fatal else chosen[:cap]
+        selected = select(distinct, cap)
+    else:
+        # Small exports retain the caller's detector/inspection order. The
+        # hand-in card selector still applies dollar order and supply caps.
+        positions = {c.candidate_id: n for n, c in enumerate(candidates)}
+        selected = sorted(distinct, key=lambda x: (not x.eligible, positions[x.key]))[:cap]
+    chosen = [] if quality.has_fatal else [by_id[x.key] for x in selected]
 
     assumptions: dict[str, Assumption] = {}
     requests = []
