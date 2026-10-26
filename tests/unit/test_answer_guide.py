@@ -34,6 +34,7 @@ from contracts.enums import (
     Confidence,
     Decision,
     DetectorFamily,
+    Dimension,
     MetricKey,
     Relation,
     RunStatus,
@@ -49,7 +50,7 @@ from contracts.models import (
 from contracts.templates import HypothesisCode
 from contracts.templates import ObservationTemplateId as Template
 from llm.analysis import explore_candidates
-from llm.answer import final_schema, repair_errors, step_schema
+from llm.answer import attach_code_fields, final_schema, repair_errors, step_schema
 from llm.profiles import load_profile
 from llm.ranking import RankingError, check_ranking
 from llm.tokens import estimate_pack_prompt_tokens
@@ -137,9 +138,8 @@ def verdict(bundle, rec):
 
 def schemas(pack):
     options = list(pack.answer_guide.observation_options)
-    segments = {s.segment_id for s in pack.segments}
     periods = {p.period_id for p in pack.periods}
-    return final_schema(pack, options), step_schema(pack, options, segments, periods, True)
+    return final_schema(pack, options), step_schema(pack, options, pack.segments, periods, True)
 
 
 def admitted(schema, document):
@@ -181,9 +181,13 @@ def test_guide_following_answers_validate_for_every_candidate_and_decision(bundl
             rec = guided(pack, decision)
             result = verdict(bundle, rec)
             assert result.accepted, (decision, [(e.code, e.path) for e in result.errors])
-            document = rec.model_dump(mode="json")
+            # The model leaves overlap groups to code, which attaches them.
+            document = rec.model_dump(mode="json") | {"overlap_group_ids": []}
             assert admitted(final, document)
             assert admitted(step, {"kind": "final", "recommendation": document})
+            assert attach_code_fields(
+                CandidateRecommendation.model_validate(document), pack
+            ) == rec
     # Some candidates may be tested; restricted ones (scale winners here) may not.
     assert offered[Decision.RECOMMEND_TEST] and offered[Decision.RECOMMEND_TEST] < 15
     assert offered[Decision.INVESTIGATE_FIRST] == offered[Decision.REJECT] == 15
@@ -211,12 +215,16 @@ def test_live_failure_classes_are_refused_and_now_prevented_or_named(bundle):
         template_id=comparison.template_id,
         fact_ids=[comparison.fact_ids[1], comparison.fact_ids[0], comparison.fact_ids[2]],
     )
-    for rec, code in [
-        (edit(base, observation_statements=[swapped]), Code.WRONG_ROLE),
-        (edit(base, overlap_group_ids=[]), Code.OVERLAP_CONFLICT),
-    ]:
-        refused(rec, code)
-        assert not admitted(final, rec.model_dump(mode="json"))
+    rec = edit(base, observation_statements=[swapped])
+    refused(rec, Code.WRONG_ROLE)
+    assert not admitted(final, rec.model_dump(mode="json") | {"overlap_group_ids": []})
+    # Overlap groups are code-attached; the validator still refuses an answer
+    # without them, so the non-additivity protection does not rest on the model.
+    dropped = edit(base, overlap_group_ids=[])
+    refused(dropped, Code.OVERLAP_CONFLICT)
+    assert admitted(final, dropped.model_dump(mode="json"))
+    assert not admitted(final, base.model_dump(mode="json"))
+    assert verdict(bundle, attach_code_fields(dropped, pack)).accepted
     with_counter = next(p for p in packs if p.candidate.counter_evidence_fact_ids)
     rec = edit(guided(with_counter), counter_evidence_fact_ids=[])
     refused(rec, Code.MISSING_COUNTER_EVIDENCE)
@@ -331,7 +339,7 @@ def _final_from_guide(request, extra=None):
         "risk_codes": [],
         "success_metric_keys": [],
         "confidence_in_observation": "low",
-        "overlap_group_ids": c["overlap_group_ids"],
+        "overlap_group_ids": [],
         "merge_source_candidate_ids": [],
     }
     if request.response_schema_name == "candidate_final":
@@ -394,8 +402,9 @@ def test_rejected_candidates_keep_every_refused_attempt():
     outcome, client = _run([wrong, wrong, wrong])
     (analysis,) = outcome.run.analyses
     assert analysis.status is AnalysisStatus.REJECTED_INVALID
-    assert [a.attempt for a in analysis.rejected_attempts] == [1, 2, 3]
-    assert len(client.requests) == 3
+    # The correction repeated the named error, so no third generation is spent.
+    assert [a.attempt for a in analysis.rejected_attempts] == [1, 2]
+    assert len(client.requests) == 2
 
 
 def test_a_peer_comparison_adds_observation_options_the_model_may_cite():
@@ -576,8 +585,8 @@ def test_peer_comparison_is_offered_only_for_slices_fixing_every_dimension(bundl
         segments = {s.segment_id: s for s in pack.segments}
         peers = peer_segments(segments.values())
         schema = step_schema(
-            pack, list(pack.answer_guide.observation_options), set(segments),
-            {p.period_id for p in pack.periods}, True, peers,
+            pack, list(pack.answer_guide.observation_options), segments.values(),
+            {p.period_id for p in pack.periods}, True,
         )
         union = schema["properties"]["tool_call"]["anyOf"][0]["oneOf"]
         offered = "#/$defs/CompareToPeersArgs" in [r["$ref"] for r in union]
@@ -606,3 +615,21 @@ def test_a_slice_below_its_baseline_is_never_offered_more_traffic(bundle):
         assert allocation == (relations == {Relation.GREATER})
         assert throttle == (relations == {Relation.LESS})
     assert directions == {Relation.GREATER, Relation.LESS}
+
+
+def test_breakdown_is_offered_only_by_dimensions_the_slice_does_not_fix(bundle):
+    """Live regression: 13 refusals of breakdown_dimension_already_fixed on a
+    full-size run, each spending a turn and a tool execution."""
+    offered = 0
+    for pack in bundle.packs.values():
+        _, step = schemas(pack)
+        for segment in pack.segments:
+            for dim in Dimension:
+                call = {
+                    "tool": "breakdown", "segment_id": segment.segment_id, "by": dim.value,
+                    "period_id": pack.candidate.period_id, "limit": 5,
+                }
+                expected = segment.cohort_id == "full_input" and dim not in segment.filters
+                assert admitted(step, {"kind": "call_tool", "tool_call": call}) == expected
+                offered += expected
+    assert offered

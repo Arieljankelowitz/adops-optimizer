@@ -53,7 +53,8 @@ from llm.answer import (
     explore_schema,
     final_schema,
     output_issues,
-    peer_segments,
+    attach_code_fields,
+    breakdown_dimensions,
     repair_errors,
     step_schema,
 )
@@ -72,6 +73,22 @@ from pipeline.evidence import (
 TURN_RESERVE_TOKENS = 256
 # Corrections per candidate; the validator refuses an analysis claiming more.
 MAX_REPAIRS = 2
+# Marks a candidate whose correction repeated its errors: no further repair.
+STOP_REPAIRS: list[ValidationIssue] = []
+
+
+def _same_errors(before, after) -> bool:
+    """Whether a correction repeated the same grounding errors (code, path, reference).
+
+    Only the validator's grounding refusals count: a malformed or cut-off
+    answer is a sampling accident another attempt can fix.
+    """
+    def key(issues):
+        return sorted({(i.code, i.path, i.ref) for i in issues})
+
+    return all(i.code is not ValidationErrorCode.SCHEMA_INVALID for i in after) and key(
+        before
+    ) == key(after)
 
 
 @dataclass
@@ -260,16 +277,24 @@ def analyze_candidate(
     )
     thresholds = {r for i in pack.quality_issues for r in i.threshold_fact_ids}
     tool_cap = min(budget.max_tool_calls_per_candidate, 3)
+    own_breakdown = next(
+        iter(
+            breakdown_dimensions(
+                s for s in pack.segments if s.segment_id == pack.candidate.segment_id
+            ).values()
+        ),
+        [],
+    )
 
     def scopes():
-        """Segment IDs, period IDs and the segments with matched peers in scope."""
+        """Segments (by ID) and period IDs in scope."""
         segments = {s.segment_id: s for s in pack.segments} | {
             f.segment.segment_id: f.segment for f in known.values()
         }
         periods = {p.period_id for p in pack.periods} | {
             f.period.period_id for f in known.values()
         }
-        return set(segments), periods, peer_segments(segments.values())
+        return segments, periods
 
     def result(status, rec=None, reason=None):
         if status is not AnalysisStatus.COMPLETE:
@@ -291,6 +316,11 @@ def analyze_candidate(
         nonlocal repair_issues
         stats.invalid_outputs += 1
         rejected.append(RejectedAttempt(attempt=turns + repairs, errors=issues[:32]))
+        if repairs and _same_errors(rejected[-2].errors, rejected[-1].errors):
+            # The correction repeated the very errors it was shown with their
+            # fixes: another round costs a generation and changes nothing.
+            repair_issues = STOP_REPAIRS
+            return
         # The model sees what it answered; a cut-off or unparsable answer is
         # not echoed back.
         if answer is not None:
@@ -303,7 +333,9 @@ def analyze_candidate(
             repair or force_final or turns + 1 >= min(budget.max_turns_per_candidate, 4)
         )
         if repair:
-            if repairs >= min(budget.max_repairs_per_candidate, MAX_REPAIRS):
+            if repair_issues is STOP_REPAIRS or repairs >= min(
+                budget.max_repairs_per_candidate, MAX_REPAIRS
+            ):
                 return result(AnalysisStatus.REJECTED_INVALID)
             repairs += 1
             messages.append(
@@ -333,12 +365,14 @@ def analyze_candidate(
                             peer_definition(pack.run_namespace, d).peer_definition_id
                             for d in Dimension
                         ],
+                        # The candidate's slice already fixes the other dimensions.
+                        "breakdown_by": own_breakdown,
                     }
                 ),
             )
         )
         try:
-            segment_ids, period_ids, peer_ids = scopes()
+            segments, period_ids = scopes()
             response = generate(
                 client,
                 budget,
@@ -355,10 +389,9 @@ def analyze_candidate(
                 else step_schema(
                     pack,
                     options,
-                    segment_ids,
+                    segments.values(),
                     period_ids,
                     executions < tool_cap,
-                    peer_ids,
                 ),
             )
             call = native_call = None
@@ -380,7 +413,7 @@ def analyze_candidate(
                     or call.tool not in tools.allowed_tools
                 ):
                     raise ValueError("tool_not_allowed")
-                allowed_segments, allowed_periods, _ = scopes()
+                allowed_segments, allowed_periods = scopes()
                 if (
                     call.segment_id not in allowed_segments
                     or call.period_id not in allowed_periods
@@ -491,6 +524,7 @@ def analyze_candidate(
                     messages.extend(exchange)
                     options.extend(new_options)
                 continue
+            rec = attach_code_fields(rec, pack)
             _check_recommendation(rec, pack)
             completed = result(AnalysisStatus.COMPLETE, rec)
             # Runner supplies lane C's validator. Its rejected result gets the
@@ -613,15 +647,14 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
                 schema=explore_schema(
                     bundle.run_namespace,
                     [known[r] for r in sorted(returned)],
-                    {s.segment_id for s in offered_segments}
-                    | {f.segment.segment_id for f in known.values()},
+                    {
+                        s.segment_id: s
+                        for s in (*offered_segments, *(f.segment for f in known.values()))
+                    }.values(),
                     {p.period_id for p in offered_periods}
                     | {f.period.period_id for f in known.values()},
                     final
                     or executions >= min(budget.max_explore_tool_calls, 3),
-                    peer_segments(
-                        [*offered_segments, *(f.segment for f in known.values())]
-                    ),
                 ),
             )
             step = ExploreStep.model_validate_json(response.content)
@@ -758,7 +791,7 @@ def explore_candidates(bundle, tools, client, budget, judged=()) -> ExploreResul
             )
             # The same issue shrink and answer guide as a rule candidate's pack.
             detailed, summarised = split_issues(
-                candidate, segment, issues, bundle.segments
+                candidate, segment, issues, bundle.segments, bundle.facts
             )
             pack_facts = dict(known)
             for ref in issue_fact_ids(detailed):

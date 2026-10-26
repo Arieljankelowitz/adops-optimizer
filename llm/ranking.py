@@ -201,8 +201,14 @@ def rank_recommendations(
             role="user",
             content=canonical_json(
                 {
+                    # Overlap groups reach the model as conflicting_pairs; the
+                    # raw group lists grow with the export, not the decision.
                     "validated_recommendations": [
-                        r.model_dump(mode="json") for r in actionable
+                        r.model_dump(
+                            mode="json",
+                            exclude={"recommendation": {"overlap_group_ids"}},
+                        )
+                        for r in actionable
                     ],
                     "evidence": facts_view([registry[r] for r in sorted(refs)]),
                     # Computed by the same rule the ranking check applies.

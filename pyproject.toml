@@ -28,7 +28,8 @@ package = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--import-mode=importlib -m 'not live'"
+addopts = "--import-mode=importlib -m 'not live and not fullsize'"
 markers = [
     "live: opt-in tests that call a real self-hosted model endpoint",
+    "fullsize: opt-in offline run on a generated ~116,000-row synthetic export (minutes)",
 ]

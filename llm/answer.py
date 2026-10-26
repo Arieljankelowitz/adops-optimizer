@@ -8,10 +8,13 @@ errors carry codes, paths, IDs and static text only, never model or data text.
 """
 
 import re
+from collections.abc import Iterable
+from copy import deepcopy
 
 from pydantic import ValidationError
 
 from contracts.enums import Dimension
+from pipeline.scope import FULL_INPUT_COHORT
 from contracts.enums import ValidationErrorCode as Code
 from contracts.models import (
     BreakdownArgs,
@@ -23,6 +26,7 @@ from contracts.models import (
     Fact,
     NextStep,
     ObservationStatement,
+    Segment,
     ValidationIssue,
 )
 from llm.tools import peer_definition
@@ -82,7 +86,9 @@ def _narrow_recommendation(
         )
         | ({"minItems": 1} if options else {}),
         counter_evidence_fact_ids=_fixed_list(c.counter_evidence_fact_ids),
-        overlap_group_ids=_fixed_list(c.overlap_group_ids),
+        # Code attaches every overlap group (``attach_code_fields``); a slice
+        # in a busy export overlaps far more candidates than the model should echo.
+        overlap_group_ids={"type": "array", "maxItems": 0},
         merge_source_candidate_ids={"type": "array", "maxItems": 0},
         test_template_id={
             "enum": [t.value for t in pack.permitted_test_templates] + [None]
@@ -92,6 +98,23 @@ def _narrow_recommendation(
         scenario_ids=_choice_list([s.scenario_id for s in pack.scenarios], 1),
     )
     schema["required"] = sorted(props)
+
+
+def attach_code_fields(
+    rec: CandidateRecommendation, pack: CandidatePack
+) -> CandidateRecommendation:
+    """The answer with the fields code owns filled from the candidate.
+
+    ``overlap_group_ids`` is bookkeeping, not judgment: the candidate's own
+    groups, which the validator still requires exactly and ranking still uses
+    to keep overlapping recommendations apart.
+    """
+    return CandidateRecommendation.model_validate(
+        {
+            **rec.model_dump(mode="json"),
+            "overlap_group_ids": list(pack.candidate.overlap_group_ids),
+        }
+    )
 
 
 def final_schema(pack: CandidatePack, options: list[ObservationStatement]) -> dict:
@@ -105,45 +128,73 @@ def final_schema(pack: CandidatePack, options: list[ObservationStatement]) -> di
 def step_schema(
     pack: CandidatePack,
     options: list[ObservationStatement],
-    segment_ids: set[str],
+    segments: Iterable[Segment],
     period_ids: set[str],
     tools_left: bool,
-    peer_segment_ids: set[str] = frozenset(),
 ) -> dict:
-    """Schema of a tool-or-final turn: tool scopes are the ones the loop accepts."""
+    """Schema of a tool-or-final turn: tool scopes are the ones the tools answer."""
     schema = NextStep.model_json_schema()
     if pack.answer_guide is None:
         return schema
     defs = schema["$defs"]
     _narrow_recommendation(defs["CandidateRecommendation"], pack, options)
-    _narrow_tools(schema, pack.run_namespace, segment_ids, period_ids, peer_segment_ids)
+    _narrow_tools(schema, pack.run_namespace, segments, period_ids)
     if not tools_left:
         schema["properties"]["kind"] = {"const": "final"}
     return schema
 
 
-def _narrow_tools(
-    schema: dict, namespace: str, segment_ids, period_ids, peer_segment_ids
-) -> None:
-    """Tool scopes the loop accepts; peers only for slices fixing every dimension."""
+def _drop_tool(schema: dict, model) -> None:
+    """Remove one tool from the call union: no slice in scope can use it."""
+    union = schema["properties"]["tool_call"]["anyOf"][0]
+    ref = f"#/$defs/{model.__name__}"
+    union["oneOf"] = [r for r in union["oneOf"] if r["$ref"] != ref]
+    name = model.model_fields["tool"].default
+    union.get("discriminator", {}).get("mapping", {}).pop(str(name), None)
+    del schema["$defs"][model.__name__]
+
+
+def _narrow_tools(schema: dict, namespace: str, segments, period_ids) -> None:
+    """Only calls the deterministic tools answer, so none is refused for its scope.
+
+    Every tool reads full-input slices; a breakdown varies a dimension the
+    slice does not fix (one variant per set of free dimensions); peers need a
+    slice fixing every dimension.
+    """
+    segments = list(segments)
     defs = schema["$defs"]
+    tool_segments = sorted(
+        {s.segment_id for s in segments if s.cohort_id == FULL_INPUT_COHORT}
+    )
     for model in _TOOL_ARGS:
         props = defs[model.__name__]["properties"]
-        props["segment_id"] = {"enum": sorted(segment_ids)}
+        props["segment_id"] = {"enum": tool_segments}
         props["period_id"] = {"enum": sorted(period_ids)}
+    by_dims: dict[tuple[str, ...], list[str]] = {}
+    for sid, dims in breakdown_dimensions(segments).items():
+        by_dims.setdefault(tuple(dims), []).append(sid)
+    if by_dims:
+        base = defs[BreakdownArgs.__name__]
+        variants = []
+        for dims, sids in sorted(by_dims.items()):
+            variant = deepcopy(base)
+            variant["properties"]["segment_id"] = {"enum": sorted(sids)}
+            variant["properties"]["by"] = {"enum": list(dims)}
+            variants.append(variant)
+        defs[BreakdownArgs.__name__] = (
+            variants[0] if len(variants) == 1 else {"anyOf": variants}
+        )
+    else:
+        _drop_tool(schema, BreakdownArgs)
     peers = defs[CompareToPeersArgs.__name__]["properties"]
     peers["peer_definition_id"] = {
         "enum": [peer_definition(namespace, d).peer_definition_id for d in Dimension]
     }
-    if peer_segment_ids:
-        peers["segment_id"] = {"enum": sorted(peer_segment_ids)}
-        return
-    # No slice in scope has matched peers: the tool cannot be called at all.
-    union = schema["properties"]["tool_call"]["anyOf"][0]
-    ref = f"#/$defs/{CompareToPeersArgs.__name__}"
-    union["oneOf"] = [r for r in union["oneOf"] if r["$ref"] != ref]
-    union.get("discriminator", {}).get("mapping", {}).pop("compare_to_peers", None)
-    del defs[CompareToPeersArgs.__name__]
+    peer_ids = peer_segments(segments)
+    if peer_ids:
+        peers["segment_id"] = {"enum": sorted(peer_ids)}
+    else:
+        _drop_tool(schema, CompareToPeersArgs)
 
 
 def peer_segments(segments) -> set[str]:
@@ -151,17 +202,29 @@ def peer_segments(segments) -> set[str]:
     return {
         s.segment_id
         for s in segments
-        if s.cohort_id == "full_input" and all(d in s.filters for d in Dimension)
+        if s.cohort_id == FULL_INPUT_COHORT and all(d in s.filters for d in Dimension)
+    }
+
+
+def breakdown_dimensions(segments) -> dict[str, list[str]]:
+    """Per full-input slice, the dimensions ``breakdown`` may split it by.
+
+    A dimension the slice already fixes has one value only; the tool refuses
+    it. A slice fixing every dimension cannot be broken down at all.
+    """
+    return {
+        s.segment_id: [d.value for d in Dimension if d not in s.filters]
+        for s in segments
+        if s.cohort_id == FULL_INPUT_COHORT and len(s.filters) < len(Dimension)
     }
 
 
 def explore_schema(
     namespace: str,
     returned: list[Fact],
-    segment_ids: set[str],
+    segments: Iterable[Segment],
     period_ids: set[str],
     final: bool,
-    peer_segment_ids: set[str] = frozenset(),
 ) -> dict:
     """Discovery turn schema: proposals cite only facts the tools returned.
 
@@ -171,7 +234,7 @@ def explore_schema(
     """
     schema = ExploreStep.model_json_schema()
     defs = schema["$defs"]
-    _narrow_tools(schema, namespace, segment_ids, period_ids, peer_segment_ids)
+    _narrow_tools(schema, namespace, segments, period_ids)
     usable = sorted(
         (f for f in returned if f.segment.cohort_id == "full_input"),
         key=lambda f: f.fact_id,

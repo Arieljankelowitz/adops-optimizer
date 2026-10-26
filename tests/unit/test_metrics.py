@@ -261,3 +261,61 @@ def test_comparison_and_daily_change_facts() -> None:
     change = b.daily_change(days[0], days[1])
     assert change.value == Decimal("2")  # 2 -> 6 per million is +200%
     assert change.period.included_dates == [DAYS[0], DAYS[1]]
+
+
+def test_issue_index_matches_pairwise_overlap_on_every_scope() -> None:
+    """The label index answers exactly what checking every issue slice would."""
+    import random
+
+    from contracts.enums import InferenceRestriction
+    from pipeline.metrics import IssueIndex, segments_overlap
+    from tests.support.analytics_data import load_fixture
+
+    data = load_fixture()
+    ns = quality_for(data).run_namespace
+    store = aggregate(data, quality_for(data), AnalyticsConfig())
+    rng = random.Random(7)
+    segment_ids, period_ids = sorted(store.segments), sorted(store.periods)
+    restrictions = list(InferenceRestriction)
+    issues = []
+    for n in range(40):
+        scope = rng.sample(segment_ids, rng.choice([0, 1, 3, 12]))
+        if n % 9 == 0:
+            scope.append("G_" + "f" * 16)  # an unknown slice touches everything
+        issues.append(QualityIssue(
+            issue_id=make_id(IdPrefix.QUALITY_ISSUE, ns, ["index", n]), rule_id=QualityRuleId.DQ07,
+            rule_version=1, severity=Severity.WARNING, segment_ids=scope,
+            period_ids=rng.sample(period_ids, rng.choice([0, 1, 2])), measured_fact_ids=[],
+            threshold_fact_ids=[], row_count=1, request_exposure_fact_id=None,
+            revenue_exposure_fact_id=None,
+            inference_restrictions=rng.sample(restrictions, 2), message_template_id="DQ07_coverage",
+        ))
+    quality = quality_for(data, issues)
+    index = IssueIndex(store, quality)
+
+    def touches(issue, segment):
+        return not issue.segment_ids or any(
+            sid not in store.segments or segments_overlap(store.segments[sid].filters, segment.filters)
+            for sid in issue.segment_ids
+        )
+
+    def dated(issue, period, covers):
+        dates = set(period.included_dates)
+        return not issue.period_ids or any(
+            pid not in store.periods
+            or (dates <= set(store.periods[pid].included_dates) if covers
+                else bool(dates & set(store.periods[pid].included_dates)))
+            for pid in issue.period_ids
+        )
+
+    for sid in rng.sample(segment_ids, 150):
+        segment = store.segments[sid]
+        for pid in period_ids:
+            period = store.periods[pid]
+            assert index.issues_for(segment, period) == sorted(
+                i.issue_id for i in issues if touches(i, segment) and dated(i, period, False)
+            )
+            assert index.restrictions_for(segment, period) == {
+                r for i in issues if touches(i, segment) and dated(i, period, True)
+                for r in i.inference_restrictions
+            }

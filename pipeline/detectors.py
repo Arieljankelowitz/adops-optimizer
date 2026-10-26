@@ -756,9 +756,31 @@ def _overlaps(ctx: _Context, drafts: Sequence[_Draft]) -> dict[str, OverlapGroup
         for dim, label in draft.segment.filters.items():
             mask &= (five[dim.value] == label).to_numpy()
         masks[draft.candidate_id] = mask
+    # Two slices overlap unless they fix a shared dimension differently: index
+    # drafts by the labels they fix, so each draft meets only the drafts that
+    # agree with it (a full-size export has thousands of candidates).
+    by_dims: dict[tuple[Dimension, ...], list[int]] = {}
+    for i, draft in enumerate(drafts):
+        by_dims.setdefault(ctx.dims(draft.segment), []).append(i)
+    projections: dict[tuple[tuple[Dimension, ...], tuple[Dimension, ...]], dict] = {}
+
+    def agreeing(a: _Draft) -> list[int]:
+        out = []
+        for dims, members in by_dims.items():
+            shared = tuple(d for d in dims if d in a.segment.filters)
+            index = projections.get((dims, shared))
+            if index is None:
+                index = {}
+                for j in members:
+                    key = tuple(drafts[j].segment.filters[d] for d in shared)
+                    index.setdefault(key, []).append(j)
+                projections[(dims, shared)] = index
+            out.extend(index.get(tuple(a.segment.filters[d] for d in shared), ()))
+        return sorted(out)
+
     groups: dict[str, OverlapGroup] = {}
     for i, a in enumerate(drafts):
-        for b in drafts[i + 1:]:
+        for b in (drafts[j] for j in agreeing(a) if j > i):
             if not segments_overlap(a.segment.filters, b.segment.filters):
                 continue
             shared = masks[a.candidate_id] & masks[b.candidate_id]

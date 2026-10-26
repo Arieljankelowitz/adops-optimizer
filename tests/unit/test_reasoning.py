@@ -197,15 +197,30 @@ def test_grounding_and_schema_share_two_repairs(pack, error_code):
     client = FakeClient([final(pack), answer, answer])
     result = analyze_candidate(pack, router, client, RunBudget())
     assert result.status is AnalysisStatus.REJECTED_INVALID
-    assert len(client.requests) == 3 and result.repairs == 2
+    # The correction repeated the same named error: no third generation.
+    assert len(client.requests) == 2 and result.repairs == 1
     assert [[e.code.value for e in a.errors] for a in result.rejected_attempts] == [
         [error_code]
-    ] * 3
+    ] * 2
     # The repair turn shows the refused answer, then the named error.
     repair = client.requests[1].messages
     assert repair[-3].role == "assistant" and json.loads(repair[-3].content) == final(pack)
     errors = json.loads(repair[-2].content)["errors"]
     assert [(e["code"], e["path"]) for e in errors] == [(error_code, "recommendation")]
+
+
+def test_a_correction_with_new_errors_keeps_its_second_repair(pack):
+    router = FakeRouter(pack)
+    paths = iter(["recommendation", "observation_statements", "risk_codes"])
+    router.validate_analysis = lambda result: ValidationRejected(
+        errors=[ValidationIssue(code="wrong_role", path=next(paths), detail="synthetic")]
+    )
+    answer = recommendation(pack).model_dump(mode="json")
+    client = FakeClient([final(pack), answer, answer])
+    result = analyze_candidate(pack, router, client, RunBudget())
+    assert result.status is AnalysisStatus.REJECTED_INVALID
+    assert len(client.requests) == 3 and result.repairs == 2
+    assert len(result.rejected_attempts) == 3
 
 
 def test_auth_is_not_retried_or_repaired(pack):

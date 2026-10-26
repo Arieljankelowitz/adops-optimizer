@@ -67,7 +67,14 @@ class _Registry[T: (Fact, Assumption, Scenario)]:
         return self._namespace
 
     def extended(self, items: Iterable[T]) -> "_Registry[T]":
-        return type(self)(self.namespace, (*self._items.values(), *items))
+        # Existing records are already private snapshots; only new ones are
+        # copied (a full-size run holds hundreds of thousands of facts).
+        new = type(self)(self.namespace, items)
+        for key in new._items:
+            if key in self._items:
+                raise ValueError(f"{key} is already registered; records are immutable")
+        new._items = MappingProxyType({**self._items, **new._items})
+        return new
 
     def get(self, key: str) -> T | None:
         item = self._items.get(key)
