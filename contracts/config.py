@@ -95,7 +95,11 @@ class AnalyticsConfig(Config):
 
 
 class DetectorConfig(Config):
-    detectors_version: int = Field(default=1, ge=1)
+    detectors_version: int = Field(default=2, ge=1)
+    # Bound expensive fact construction, quality refinement and overlap pairs.
+    # Patterns are still scanned over every observed slice; keep the largest
+    # traffic exposures, not thousands of immaterial five-key combinations.
+    max_evidence_candidates: int = Field(default=40, ge=15, le=200)
     scale_yield_multiple: DecimalValue = Decimal("2")
     scale_max_request_share: DecimalValue = Decimal("0.02")
     waste_max_revenue_per_million: DecimalValue = Decimal("0.05")
@@ -123,6 +127,10 @@ class DetectorConfig(Config):
 
 class EvidenceConfig(Config):
     max_candidates: int = Field(default=15, ge=1, le=15)
+    # Above this many observed segments, judge the ten largest shortlisted
+    # opportunities. Smaller exports retain their full 15-candidate view.
+    large_export_segments: int = Field(default=2_000, ge=1)
+    large_export_max_candidates: int = Field(default=10, ge=1, le=15)
     # The compact prompt payload reserves space for instructions, tool results
     # and repair turns: half of the active profile's 32,768-token window. The
     # transport must still count the deployed tokenizer before sending.

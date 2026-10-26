@@ -18,6 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -1572,15 +1573,21 @@ def refine_quality(
 
     targets: dict[tuple[str, str], list[str]] = {}
     parents: dict[tuple[str, str], list[str]] = {}
+    # A five-key slice has at most 30 nonempty proper parents. Looking each
+    # one up avoids scanning every observed slice for every candidate.
+    by_filters = {
+        (s.cohort_id, frozenset(s.filters.items())): s
+        for s in metrics.segments.values()
+    }
     for candidate in candidates:
         seg, per = _scope(metrics, candidate)
         targets.setdefault((seg.segment_id, per.period_id), []).append(candidate.candidate_id)
-        for other in metrics.segments.values():
-            if (other.cohort_id == seg.cohort_id and other.filters
-                    and len(other.filters) < len(seg.filters)
-                    and other.filters.items() <= seg.filters.items()):
-                parents.setdefault((other.segment_id, per.period_id), []).append(
-                    candidate.candidate_id)
+        for size in range(1, len(seg.filters)):
+            for subset in combinations(seg.filters.items(), size):
+                other = by_filters.get((seg.cohort_id, frozenset(subset)))
+                if other is not None:
+                    parents.setdefault((other.segment_id, per.period_id), []).append(
+                        candidate.candidate_id)
 
     outcomes: dict[QualityRuleId, list[RuleOutcome]] = {r: [] for r in R}
     issues: dict[QualityRuleId, list[QualityIssue]] = {r: [] for r in R}

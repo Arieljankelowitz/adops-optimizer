@@ -763,7 +763,10 @@ def build_evidence_bounded(
             candidate.model_copy(update={"quality_issue_ids": issue_ids}, deep=True)
         )
     chosen = [c for c in enriched if c.eligibility is not EligibilityStatus.REJECTED]
-    chosen = [] if quality.has_fatal else chosen[: config.max_candidates]
+    cap = config.max_candidates
+    if len(metrics.segments) > config.large_export_segments:
+        cap = min(cap, config.large_export_max_candidates)
+    chosen = [] if quality.has_fatal else chosen[:cap]
 
     assumptions: dict[str, Assumption] = {}
     requests = []

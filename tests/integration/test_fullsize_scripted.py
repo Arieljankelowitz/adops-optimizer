@@ -39,15 +39,16 @@ def _check(outcome, model, events, min_validated):
     bundle = run.bundle
     # Every pack fits the window with room for tools: none is left unjudged.
     assert not bundle.unpacked
-    # Overlap is heavy: the old contract (at most 8 groups) refused these.
-    assert max(len(p.candidate.overlap_group_ids) for p in bundle.packs.values()) > 8
+    # The bounded shortlist still overlaps; code-attached groups must survive.
+    assert max(len(p.candidate.overlap_group_ids) for p in bundle.packs.values()) > 0
+    assert len(bundle.candidates) <= 40
     refused = Counter(
         (e.path, e.detail) for a in run.analyses for at in a.rejected_attempts for e in at.errors
     )
     assert not refused, refused
     assert not any(e.message_code == "tool_refused" for e in events)
     detector = [a for a in run.analyses if bundle.candidates[a.candidate_id].origin == "detector"]
-    assert len(detector) == 15
+    assert len(detector) == 10
     assert all(a.status is AnalysisStatus.COMPLETE for a in detector)
     actionable = [
         r for r in run.recommendations

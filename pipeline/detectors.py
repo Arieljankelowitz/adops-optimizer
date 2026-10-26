@@ -813,6 +813,17 @@ def run_detection(metrics: MetricsStore, quality: QualityReport, config: Detecto
     """Every detector family, deduplication, overlap graph, evidence facts and sensitivity."""
     ctx = _Context(metrics, quality, config)
     hits, eligible = _scan(ctx)
+    # Scan patterns everywhere, but construct evidence for a bounded shortlist.
+    # Previously thousands of overlapping hits each built daily/peer facts,
+    # quality checks and pairwise overlap graphs (then only 15 were judged).
+    # Traffic exposure is an auditable opportunity-size proxy, not predicted uplift.
+    bounded = len(ctx.rows) > 2_000 and len(hits) > config.max_evidence_candidates
+    if bounded:
+        hits.sort(key=lambda h: (
+            (h[0], h[1].segment_id) not in eligible[BASE],
+            -as_decimal(h[2]["requests"]), h[0].value, h[1].segment_id,
+        ))
+        hits = hits[:config.max_evidence_candidates]
     drafts = []
     for family, segment, row in hits:
         status = (
@@ -833,6 +844,11 @@ def run_detection(metrics: MetricsStore, quality: QualityReport, config: Detecto
             -as_decimal(d.row["requests"]), d.segment.segment_id,
         )
     )
+    if bounded:
+        drafts.sort(key=lambda d: (
+            _ELIGIBILITY_ORDER[d.eligibility], -as_decimal(d.row["requests"]),
+            d.family.value, d.segment.segment_id,
+        ))
     groups = _overlaps(ctx, [d for d in drafts if d.eligibility is not EligibilityStatus.REJECTED])
     candidates = tuple(_to_candidate(ctx, d) for d in drafts)
 
