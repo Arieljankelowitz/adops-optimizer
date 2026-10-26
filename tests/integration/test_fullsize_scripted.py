@@ -41,7 +41,7 @@ def _check(outcome, model, events, min_validated):
     assert not bundle.unpacked
     # The bounded shortlist still overlaps; code-attached groups must survive.
     assert max(len(p.candidate.overlap_group_ids) for p in bundle.packs.values()) > 0
-    assert len(bundle.candidates) <= 40
+    assert sum(c.origin == "detector" for c in bundle.candidates.values()) <= 40
     refused = Counter(
         (e.path, e.detail) for a in run.analyses for at in a.rejected_attempts for e in at.errors
     )

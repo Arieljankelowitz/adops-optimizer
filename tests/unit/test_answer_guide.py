@@ -19,6 +19,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from pydantic import Field, ValidationError, create_model
 
 from contracts.config import (
     AnalyticsConfig,
@@ -615,6 +616,46 @@ def test_a_slice_below_its_baseline_is_never_offered_more_traffic(bundle):
         assert allocation == (relations == {Relation.GREATER})
         assert throttle == (relations == {Relation.LESS})
     assert directions == {Relation.GREATER, Relation.LESS}
+
+
+def test_many_overlap_groups_reproduce_legacy_too_long_and_are_code_attached(bundle):
+    """Replay the stored failure with synthetic IDs; no private data required."""
+    from llm.answer import exception_issues
+
+    pack = next(iter(bundle.packs.values()))
+    groups = [f"O_{i:016x}" for i in range(100)]
+    candidate = pack.candidate.model_copy(update={"overlap_group_ids": groups})
+    pack = pack.model_copy(update={"candidate": candidate})
+    rec = guided(pack).model_dump(mode="json")
+    legacy = create_model(
+        "LegacyRecommendation", __base__=CandidateRecommendation,
+        overlap_group_ids=(list[str], Field(max_length=8)),
+    )
+    with pytest.raises(ValidationError) as caught:
+        legacy.model_validate(rec)
+    errors = exception_issues(caught.value)
+    assert any(e.code is Code.SCHEMA_INVALID and e.path == "/overlap_group_ids"
+               and e.detail == "contract check failed: too_long" for e in errors)
+    assert len(CandidateRecommendation.model_validate(rec).overlap_group_ids) == 100
+    # The prompt and model answer do not grow with bookkeeping lists.
+    wire = rec | {"overlap_group_ids": []}
+    assert admitted(final_schema(pack, pack.answer_guide.observation_options), wire)
+    assert attach_code_fields(CandidateRecommendation.model_validate(wire), pack).overlap_group_ids == groups
+
+
+def test_bookkeeping_lists_do_not_expand_the_evidence_prompt(bundle):
+    from pipeline.evidence import pack_payload
+
+    pack = next(iter(bundle.packs.values()))
+    candidate = pack.candidate.model_copy(update={
+        "overlap_group_ids": [f"O_{i:016x}" for i in range(1000)],
+        "quality_issue_ids": [f"Q_{i:016x}" for i in range(1000)],
+    })
+    view = pack_payload(pack.model_copy(update={"candidate": candidate}))
+    assert view["candidate"]["overlap_group_count"] == 1000
+    assert view["candidate"]["quality_issue_count"] == 1000
+    assert "overlap_group_ids" not in view["candidate"]
+    assert "quality_issue_ids" not in view["candidate"]
 
 
 def test_breakdown_is_offered_only_by_dimensions_the_slice_does_not_fix(bundle):
