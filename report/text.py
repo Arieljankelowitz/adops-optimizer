@@ -586,7 +586,7 @@ OVER_PERIOD = " over the observed period"
 EXTRA_PROFIT = " extra profit"
 EXTRA_REVENUE = " extra revenue"
 THROTTLE_NO_GAIN = (
-    "No dollar gain can be estimated from this export; throttling puts about "
+    "Avoidable processing cost is not provided; throttling puts about "
 )
 AT_RISK = " at risk"
 FEW_RECOMMENDATIONS = (

@@ -31,11 +31,37 @@ intermittent grains do not appear every day. CSVs are gitignored.
 - **Inference runtime:** large exports allow one drill-down then a final judgment;
   genuinely new validation errors still get repairs. Repeating the same grounding
   error stops further wasted repairs. Optional explore remains enabled and checked.
-- **Final selection:** large exports no longer spend model calls on final ranking.
-  Code orders already-validated judgments by measured request exposure and selects
-  disjoint scopes. The ordinary ranking checker AND strict validator still apply.
-  No predicted uplift, merged evidence or caveats are invented. Reports explicitly
-  label this code-only selection; unselected judgments remain in the audit.
+- **Final selection:** large exports do not spend model calls on final ranking.
+  The audit retains the code's disjoint-scope exposure ranking and unchanged strict
+  validator results. The short hand-in report instead considers every validated
+  test/investigation, including ranking-omitted and overlapping findings, and shows
+  up to ten by estimated dollar gain then observation confidence. Revenue-at-risk-only
+  estimates rank after gains. Overlapping impacts are explicitly non-additive.
+- **Report arithmetic:** usable bundle scenarios take precedence even when the model
+  did not select them. Otherwise code registers planning facts and assumptions for
+  extra eligible traffic at observed profit yield, throttled revenue at risk (not
+  invented processing savings), account-margin recovery, a modest realized-yield
+  sensitivity on delivered wins, or impressions-per-win recovery against a comparison
+  rate with a counter-check warning. Generic investigations use an explicitly
+  illustrative revenue sensitivity, not an identified intervention effect. Missing
+  required inputs get a short reason rather than a fabricated estimate.
+- **Readable output:** both Markdown and HTML use the same cards and numeric audit.
+  Each card has at most four distinct restrictions and three test-design lines in
+  collapsed details. The top caveat box prioritizes incomplete export days and
+  account-level counter/label exposure; the quality appendix has one entry per rule.
+
+## Report-quality offline replay
+
+The same full-size scripted benchmark reproduced **11 validated findings → 3 cards,
+all without dollar estimates** before the report fixes. Afterward it produced **10
+cards with 10 labelled dollar estimates**, a passing Markdown/HTML numeric audit,
+and no validator repairs/rejections in **111.33 seconds** on the final replay. The eleventh finding is
+retained in the audit because the short report is capped at ten. The existing small
+synthetic fixture also runs end to end with the scripted model and dollar estimates.
+The default offline suite passed **659 tests** (one skipped; live/full-size tests
+excluded), including the existing small fixture and the medium scripted export.
+These are software regression checks, not evidence of model recommendation quality;
+no live model or private data was used for the report-quality change.
 
 ## Recorded results
 

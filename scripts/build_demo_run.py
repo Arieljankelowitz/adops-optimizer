@@ -5,7 +5,7 @@ export. The run exercises every report and app surface: warnings of each
 severity (and a fatal variant), account totals with a sensitivity cohort,
 daily series, matched and unmatched comparisons, every observation template,
 every recommendation field, merge, model rejection, validation rejection,
-an unranked recommendation, a model-proposed (explore) finding, tool evidence
+a ranking-omitted recommendation (still shown), a model-proposed (explore) finding, tool evidence
 with truncation, overlapping scenarios, a not-identifiable impact and a
 prompt-injection segment label.
 
@@ -380,6 +380,13 @@ def _build(status: RunStatus, fatal: bool) -> RunOutcome:
     trend_change = b.fact("trend change", s_trend, daily[2], MetricKey.DAILY_CHANGE,
                           Decimal("1.3017"), Unit.FRACTION, kind=FactKind.CALCULATED,
                           parents=(trend_early, trend_late))
+    # Planning estimates need realized delivery and a comparable counter rate.
+    b.fact("account impressions per win", account, full, MetricKey.IMPRESSION_TO_WIN_RATE,
+           Decimal("0.35"), Unit.RATIO, kind=FactKind.CALCULATED)
+    b.fact("floor high wins", s_floor_high, full, MetricKey.WINS,
+           Decimal(900000), Unit.COUNT)
+    b.fact("floor high impressions", s_floor_high, full, MetricKey.IMPRESSIONS,
+           Decimal(800000), Unit.COUNT)
     floor_ratio = b.fact("floor high bid ratio", s_floor_high, full,
                          MetricKey.RESPONSE_WEIGHTED_BID, Decimal("2.84"),
                          Unit.EXPORT_PRICE_AS_EXPORTED, kind=FactKind.CALCULATED)

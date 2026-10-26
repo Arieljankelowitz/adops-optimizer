@@ -34,7 +34,14 @@ worth testing. Streamlit (`app.py`) and the CLI (`cli.py`) share the same runner
 4. **Fact-checked report.** Validation checks the model's decisions against the
    current run's evidence. `report/summary.py` renders a short account summary,
    caveats, recommendation cards and charts, with HTML and Markdown downloads.
-   Details and the full audit trail remain available separately.
+   `report/opportunities.py` registers code-owned planning estimates before rendering,
+   preferring usable bundle scenarios. The short report includes up to ten validated
+   tests/investigations ordered by estimated dollar gain then observation confidence;
+   it does not discard findings omitted by the model ranking or overlapping scopes.
+   Risk-only estimates are not gains, and overlapping estimates are never summed.
+   Plain actions and fallback sensitivities are planning suggestions, not changes to
+   the validated model IR. Collapsed details retain restrictions, test design and
+   fact IDs; the full audit trail preserves the original model choices.
 
 ## Why split the work this way?
 

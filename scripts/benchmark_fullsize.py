@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 from contracts.config import RunConfig  # noqa: E402
 from llm.profiles import load_profile  # noqa: E402
 from report.bundle import write_bundle  # noqa: E402
+from report.summary import ShortReport, audit_summary  # noqa: E402
 from runner import default_stages, execute  # noqa: E402
 from scripts.generate_fullsize import write  # noqa: E402
 
@@ -54,6 +55,12 @@ def main():
         "synthetic_rows": rows, "seed": 20310417, "days": 7,
         "mode": "live" if args.live else "scripted", "wall_seconds": round(seconds, 2),
         "status": str(run.status), "validated": len(run.recommendations),
+        "report_cards": outcome.report.markdown.count("- **Opportunity:**"),
+        "report_dollar_estimates": sum(
+            "(estimate):**" in line and "$" in line
+            for line in outcome.report.markdown.splitlines()
+        ),
+        "report_audit_ok": audit_summary(ShortReport(outcome.report, outcome.html), run).ok,
         "analysis_statuses": dict(Counter(str(a.status) for a in run.analyses)),
         "decisions": dict(Counter(str(r.recommendation.decision) for r in run.recommendations)),
         "rejection_codes": dict(Counter(str(e.code) + ":" + e.detail
