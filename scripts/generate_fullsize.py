@@ -44,10 +44,10 @@ DEFAULT_SEED = 20310417
 DEFAULT_ROWS = 118_000
 
 COUNTRIES = (
-    "US", "DE", "BR", "IN", "GB", "FR", "IT", "ES", "MX", "CA", "JP", "KR", "AU", "NL",
-    "PL", "TR", "ID", "PH", "TH", "VN", "AR", "CO", "CL", "PE", "ZA", "NG", "EG", "SA",
-    "AE", "SE", "NO", "DK", "FI", "BE", "AT", "CH", "PT", "GR", "RO", "CZ", "HU", "UA",
-    "MY", "SG", "PK",
+    "USA", "DEU", "BRA", "IND", "GBR", "FRA", "ITA", "ESP", "MEX", "CAN", "JPN", "KOR", "AUS", "NLD",
+    "POL", "TUR", "IDN", "PHL", "THA", "VNM", "ARG", "COL", "CHL", "PER", "ZAF", "NGA", "EGY", "SAU",
+    "ARE", "SWE", "NOR", "DNK", "FIN", "BEL", "AUT", "CHE", "PRT", "GRC", "ROU", "CZE", "HUN", "UKR",
+    "MYS", "SGP", "PAK",
 )
 SIZES = (
     "300x250", "728x90", "320x50", "300x600", "160x600", "970x250", "320x100",
@@ -92,8 +92,8 @@ def _profiles(rng: random.Random):
         c: dict(weight=rng.lognormvariate(0, 1.0), ecpm=rng.lognormvariate(0, 0.35))
         for c in COUNTRIES
     }
-    country["US"]["weight"] *= 6
-    country["US"]["ecpm"] *= 2.2
+    country["USA"]["weight"] *= 6
+    country["USA"]["ecpm"] *= 2.2
     size = {z: dict(weight=rng.lognormvariate(0, 0.8), ecpm=rng.lognormvariate(0, 0.3)) for z in SIZES}
     device = {
         "Desktop": dict(weight=1.0, ecpm=1.3),
@@ -139,7 +139,9 @@ def generate(seed: int = DEFAULT_SEED, target_rows: int = DEFAULT_ROWS) -> list[
         response_rate = min(0.95, rng.uniform(0.08, 0.5) * sp["response"])
         win_rate = rng.uniform(0.12, 0.45)
         per_win = sp.get("impressions_per_win", rng.uniform(0.82, 0.97))
-        margin = sp["margin"] + rng.uniform(-0.03, 0.03)
+        # A format-wide commercial leak makes size coverage testable rather
+        # than relying on incidental labels in five-key combinations.
+        margin = sp["margin"] + rng.uniform(-0.03, 0.03) - (0.35 if z == "300x600" else 0)
         floor = _money(_dec(round(rng.uniform(0.1, 1.2) * sp["floor"], 2)) + CENT)
         bid = _money(floor * _dec(round(sp["bid_to_floor"] * rng.uniform(0.95, 1.05), 4)))
         if rng.random() < 0.85:

@@ -363,7 +363,9 @@ def as_cached(outcome: RunOutcome) -> RunOutcome:
     The manifest, and so the inference generation time, input hash and model
     identity, is unchanged; only the status and its banner change.
     """
-    run = replace(outcome.run, status=RunStatus.CACHED_PREVIOUS)
+    # Older bundles may predate today's code-owned planning formulas. Append
+    # their new estimates before rendering; never rerun inference or analytics.
+    run = prepare_estimates(replace(outcome.run, status=RunStatus.CACHED_PREVIOUS))
     short = render_summary(run)
     artifact = outcome.artifact.model_copy(update={"status": RunStatus.CACHED_PREVIOUS})
     return replace(outcome, artifact=artifact, run=run, report=short.report, html=short.html,

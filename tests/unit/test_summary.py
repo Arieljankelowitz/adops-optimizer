@@ -120,13 +120,18 @@ def test_model_proposed_findings_carry_the_found_by_ai_badge(final) -> None:
 def test_estimates_are_labelled_and_carry_their_key_assumption(final) -> None:
     cards = _cards(final.report.markdown)
     for card in cards:
-        assert "(estimate)" in card and "Assumes" in card and "$" in card
-        assert T.ESTIMATE_NOTE in card
+        visible = card.split("- **Details:**")[0]
+        estimate = next(line for line in visible.splitlines() if line.startswith("- **Estimated opportunity"))
+        assert "Assumes" not in estimate and "%" not in estimate
+        assert ("extra profit per week if" in estimate and "$" in estimate
+                or "Not estimated: needs" in estimate)
+        assert "tainted" not in visible and "Concentration" not in visible
+        assert "illustrative" not in estimate.lower()
     throttle = next(c for c in cards if ". Throttle" in c)
-    assert "Avoidable processing cost is not provided" in throttle and "at risk" in throttle
-    assert any("Assumes margin rises by" in c for c in cards)
-    assert any("counter check required" in c for c in cards)
-    assert any("extra revenue sensitivity on delivered wins" in c for c in cards)
+    assert "avoidable processing costs" in throttle and "at risk" in throttle
+    assert any("reaches the account margin" in c for c in cards)
+    assert any("delivery reaches the comparison rate" in c for c in cards)
+    assert any("bid distributions and a controlled floor-test result" in c for c in cards)
 
 
 def test_recommendations_use_plain_verbs(final) -> None:
@@ -166,6 +171,34 @@ def test_ranking_omissions_and_merge_do_not_hide_validated_findings(final) -> No
     recs = {r.recommendation_id: r for r in run.recommendations}
     scores = [planner.plan(recs[i]).score for i in own_ids]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_duplicate_validated_findings_become_one_card_with_merge_evidence(final):
+    first = final.run.recommendations[0]
+    duplicate = first.model_copy(update={"recommendation_id": "R_ffffffffffffffff"})
+    run = replace(final.run, recommendations=(*final.run.recommendations, duplicate))
+    short = render_summary(run)
+    assert len(_cards(short.report.markdown)) == len(_cards(final.report.markdown))
+    assert "collapsed duplicate findings" in short.report.markdown
+    assert "R_ffffffffffffffff" in short.report.markdown
+    assert audit_summary(short, run).ok
+
+
+def test_near_zero_counter_exposure_stays_out_of_top_caveats(final):
+    from decimal import Decimal
+    from contracts.runtime import FactRegistry
+
+    b = final.run.bundle
+    issue = next(i for i in b.quality.issues if i.rule_id.value == "DQ04")
+    fid = issue.request_exposure_fact_id
+    facts = FactRegistry(b.run_namespace, [f.model_copy(update={"value": Decimal("0.000001")})
+                         if f.fact_id == fid else f for f in b.facts.values()])
+    quality = b.quality.model_copy(update={"facts": [f.model_copy(update={"value": Decimal("0.000001")})
+                                  if f.fact_id == fid else f for f in b.quality.facts]})
+    short = render_summary(replace(final.run, bundle=replace(b, facts=facts, quality=quality)))
+    top = short.report.markdown.split("## Caveats that affect these conclusions")[1].split("## Recommendations")[0]
+    assert "Inconsistent counters" not in top
+    assert "0.00%" not in top
 
 
 def test_quality_appendix_deduplicates_rules_and_top_box_ignores_slice_noise(final) -> None:
@@ -310,5 +343,7 @@ def test_money_amounts_in_estimates_come_from_scenario_facts(final) -> None:
     scenario = b.scenarios[rec.scenario_ids[0]]
     dollars = [b.facts[i] for i in scenario.result_fact_ids if b.facts[i].unit is Unit.EXPORT_DOLLAR]
     assert dollars
-    for fact in dollars:
-        assert format_value(fact.value, fact.unit) in scale
+    profit = next(f for f in dollars if f.metric.value == "profit")
+    weekly = profit.value * 7 / len(profit.period.included_dates)
+    assert format_value(weekly, profit.unit) in scale
+    assert profit.fact_id in final.html

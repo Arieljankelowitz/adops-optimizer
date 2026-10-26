@@ -47,13 +47,15 @@ class QualityConfig(Config):
     yield_step_down: DecimalValue = Decimal("0.5")
     yield_step_min_requests: int = 1_000_000
     yield_step_min_revenue: DecimalValue = Decimal("25")
-    country_placeholders: tuple[str, ...] = ("", "-", "--", "unknown", "null", "n/a")
+    country_placeholders: tuple[str, ...] = (
+        "", "-", "--", "unknown", "undefined", "null", "n/a", "xx", "xxx", "zz", "zzz",
+    )
     size_sentinel: int = 9999
     size_max_pixels: int = 4096
     # Non-WxH size labels accepted as documented special formats.
     allowed_special_sizes: tuple[str, ...] = ()
     # Versioned accepted country reference (pipeline/countries.py) plus documented extras.
-    country_reference: str = "iso3166_alpha2_v1"
+    country_reference: str = "iso3166_alpha2_alpha3_v1"
     extra_accepted_countries: tuple[str, ...] = ()
     reconciliation_epsilon: DecimalValue = Decimal("0.000001")
     srpm_multiplier: int = 1_000_000
@@ -97,8 +99,8 @@ class AnalyticsConfig(Config):
 class DetectorConfig(Config):
     detectors_version: int = Field(default=2, ge=1)
     # Bound expensive fact construction, quality refinement and overlap pairs.
-    # Patterns are still scanned over every observed slice; keep the largest
-    # traffic exposures, not thousands of immaterial five-key combinations.
+    # Patterns are scanned everywhere; retain distinct scopes across families
+    # and dimensions rather than only the largest traffic exposures.
     max_evidence_candidates: int = Field(default=40, ge=15, le=200)
     scale_yield_multiple: DecimalValue = Decimal("2")
     scale_max_request_share: DecimalValue = Decimal("0.02")
@@ -127,8 +129,8 @@ class DetectorConfig(Config):
 
 class EvidenceConfig(Config):
     max_candidates: int = Field(default=15, ge=1, le=15)
-    # Above this many observed segments, judge the ten largest shortlisted
-    # opportunities. Smaller exports retain their full 15-candidate view.
+    # Above this many observed segments, judge up to ten distinct opportunities
+    # across families and dimensions. Smaller exports allow up to 15 packs.
     large_export_segments: int = Field(default=2_000, ge=1)
     large_export_max_candidates: int = Field(default=10, ge=1, le=15)
     # The compact prompt payload reserves space for instructions, tool results

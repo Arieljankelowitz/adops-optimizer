@@ -356,7 +356,10 @@ def test_dq09_short_period_is_not_testable() -> None:
 @pytest.mark.parametrize("label,template", [
     ("-", "DQ10_placeholder_country"),
     ("N/A", "DQ10_placeholder_country"),
-    ("ZZ", "DQ10_unverified_country"),
+    ("ZZ", "DQ10_placeholder_country"),
+    ("XXX", "DQ10_placeholder_country"),
+    ("undefined", "DQ10_placeholder_country"),
+    ("NotACountry", "DQ10_unverified_country"),
 ])
 def test_dq10_placeholder_and_unverified_countries(label: str, template: str) -> None:
     rows = clean_rows()
@@ -369,10 +372,36 @@ def test_dq10_placeholder_and_unverified_countries(label: str, template: str) ->
     assert _measured(report, issue).segment.filters == {"country": label}
 
 
+@pytest.fixture
+def alpha3_rows():
+    """Invented rows using the export's three-letter country convention."""
+    rows = clean_rows()
+    countries = ("USA", "GBR", "DEU", "FRA", "usa", "gbr", "US", "DE")
+    for n, row in enumerate(rows):
+        row[C.COUNTRY.value] = countries[n % len(countries)]
+    return rows
+
+
+def test_alpha3_and_alpha2_countries_survive_loader_and_quality(alpha3_rows) -> None:
+    data = load(alpha3_rows)
+    assert len(data.frame) == len(alpha3_rows)
+    assert not data.parse_audit.invalid_cells
+    report = assess_quality(data, QualityConfig())
+    assert outcome(report, R.DQ10) is O.NOT_TRIGGERED
+    assert not any(IR.NO_COUNTRY_OPPORTUNITY in i.inference_restrictions for i in issues(report, R.DQ10))
+
+
+def test_country_reference_contains_all_iso_alpha3_codes():
+    from pipeline.countries import ISO3166_ALPHA3_V1, accepted_countries
+    assert len(ISO3166_ALPHA3_V1) == 249
+    assert {"USA", "GBR", "DEU", "FRA", "US", "GB", "DE", "FR"} <= accepted_countries(QualityConfig().country_reference)
+    assert not {"XX", "XXX", "undefined"} & accepted_countries(QualityConfig().country_reference)
+
+
 def test_dq10_documented_extra_country_is_accepted() -> None:
     rows = clean_rows()
-    rows[0][C.COUNTRY.value] = "ZZ"
-    config = QualityConfig(extra_accepted_countries=("zz",))
+    rows[0][C.COUNTRY.value] = "CustomMarket"
+    config = QualityConfig(extra_accepted_countries=("custommarket",))
     assert outcome(assess(rows, config), R.DQ10) is O.NOT_TRIGGERED
 
 

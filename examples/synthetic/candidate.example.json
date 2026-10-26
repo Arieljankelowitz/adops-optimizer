@@ -1,5 +1,5 @@
 {
-  "candidate_id": "C_95c294fffed26f92",
+  "candidate_id": "C_d72f5b5c1d8be930",
   "counter_evidence_fact_ids": [],
   "daily_fact_ids": [],
   "eligibility": "eligible",
@@ -7,13 +7,13 @@
   "origin": "detector",
   "overlap_group_ids": [],
   "peer_fact_ids": [],
-  "period_id": "P_cbbcfe082f486693",
+  "period_id": "P_7fa86fc83bc2aea8",
   "quality_issue_ids": [
-    "Q_df526f3374cf0cab"
+    "Q_bf90fa190028a261"
   ],
   "rejection_reason": null,
-  "segment_id": "G_521f9b52972ceb22",
+  "segment_id": "G_8201414ec0f69af1",
   "trigger_fact_ids": [
-    "F_5c49352bf5e6ebea"
+    "F_650c9771892086eb"
   ]
 }

@@ -18,9 +18,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from contracts.config import RunConfig  # noqa: E402
+from contracts.enums import Dimension, MetricKey  # noqa: E402
 from llm.profiles import load_profile  # noqa: E402
 from report.bundle import write_bundle  # noqa: E402
-from report.summary import ShortReport, audit_summary  # noqa: E402
+from report.opportunities import Opportunities  # noqa: E402
+from report.summary import ShortReport, _Builder, audit_summary  # noqa: E402
 from runner import default_stages, execute  # noqa: E402
 from scripts.generate_fullsize import write  # noqa: E402
 
@@ -51,8 +53,33 @@ def main():
     seconds = time.monotonic() - started
     run = outcome.run
     bundle = write_bundle(outcome, args.out)
+    shown = _Builder(run).ordered_recommendations()
+    planner = Opportunities(run)
+    families = Counter(planner.family(r.recommendation).value for r in shown)
+    signatures = [tuple(planner.metric(r.recommendation, m).value
+                        for m in (MetricKey.REQUESTS, MetricKey.REVENUE, MetricKey.PROFIT))
+                  for r in shown]
+    supplies = Counter(run.bundle.segments[r.recommendation.segment_id].filters[Dimension.SUPPLY_ID]
+                       for r in shown if Dimension.SUPPLY_ID in run.bundle.segments[r.recommendation.segment_id].filters)
+    broad = [run.bundle.segments[r.recommendation.segment_id] for r in shown
+             if len(run.bundle.segments[r.recommendation.segment_id].filters) <= 2]
+    visible = outcome.report.markdown.split('## Recommendations')[-1].split('## Each recommended')[0]
+    visible = '\n'.join(part.split('- **Details:**')[0] for part in visible.split('### '))
+    estimates = [line for line in visible.splitlines() if line.startswith('- **Estimated opportunity')]
     stats = {
-        "synthetic_rows": rows, "seed": 20310417, "days": 7,
+        "synthetic_rows": rows,
+        "country_convention": "ISO alpha-3 plus planted placeholders",
+        "card_families": dict(families),
+        "distinct_card_totals": len(signatures) == len(set(signatures)),
+        "max_cards_per_supply": max(supplies.values(), default=0),
+        "broad_country_card": any(Dimension.COUNTRY in s.filters for s in broad),
+        "broad_size_card": any(Dimension.SIZE in s.filters for s in broad),
+        "plain_cards": ('tainted' not in visible and 'Concentration' not in visible
+                        and all('Assumes' not in x and '%' not in x
+                                and ('Not estimated: needs' in x or 'extra profit per week if' in x)
+                                for x in estimates)),
+        "country_unverified_issues": sum(i.message_template_id == 'DQ10_unverified_country'
+                                         for i in run.bundle.quality.issues), "seed": 20310417, "days": 7,
         "mode": "live" if args.live else "scripted", "wall_seconds": round(seconds, 2),
         "status": str(run.status), "validated": len(run.recommendations),
         "report_cards": outcome.report.markdown.count("- **Opportunity:**"),

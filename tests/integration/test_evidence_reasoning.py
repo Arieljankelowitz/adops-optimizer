@@ -89,7 +89,7 @@ def test_real_fixture_tools_and_ranking_repair_hook_use_strict_validator(repair)
                 )
             )
             if (
-                fact["metric"] == "requests"
+                fact["metric"] in ("requests", "revenue", "profit")
                 and fact["kind"] == "measured"
                 and fact["segment_id"] == candidate["segment_id"]
                 and fact["period_id"] == candidate["period_id"]
@@ -101,7 +101,7 @@ def test_real_fixture_tools_and_ranking_repair_hook_use_strict_validator(repair)
                     if request.response_schema_name == "candidate_final"
                     else {"kind": "final", "recommendation": payload}
                 )
-        raise AssertionError("target requests fact missing")
+        raise AssertionError("target additive fact missing")
 
     def invalid_response(request):
         response = final_response(request)

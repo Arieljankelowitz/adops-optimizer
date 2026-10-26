@@ -67,6 +67,7 @@ from pipeline.metrics import (
     stats_row,
 )
 from pipeline.quality import PEER_KEYS_DIFFER_FLAG, RANK_SENSITIVE_FLAG
+from pipeline.shortlist import Lead, collapse, select, total_signature
 
 Row = Mapping[str, Any]
 
@@ -735,7 +736,8 @@ def _dedupe(drafts: list[_Draft], share: Decimal) -> None:
             ]
             covering = [
                 c for c in children
-                if parent_requests > 0 and as_decimal(c.row["requests"]) >= share * parent_requests
+                if c.row["row_set_hash"] != parent.row["row_set_hash"]
+                and parent_requests > 0 and as_decimal(c.row["requests"]) >= share * parent_requests
             ]
             if covering:
                 child = max(covering, key=lambda c: (as_decimal(c.row["requests"]), c.candidate_id))
@@ -809,21 +811,52 @@ _ELIGIBILITY_ORDER = {
 }
 
 
+def opportunity_score(family: DetectorFamily, row: Row, account: Row) -> Decimal:
+    """Observed, conditional profit sizing for admission, never a causal forecast.
+
+    Unidentified floor effects and throttle savings have no invented uplift.
+    """
+    revenue, profit = _num(row, "revenue"), _num(row, "profit")
+    if family in (DetectorFamily.SCALE_WINNER, DetectorFamily.COMBINATION_OUTLIER):
+        return max(Decimal(0), profit * Decimal("0.1"))
+    if family is DetectorFamily.MARGIN_LEAK:
+        margin = _rate(account, "profit", "revenue") or Decimal(0)
+        return max(Decimal(0), revenue * margin - profit)
+    if family is DetectorFamily.WINS_IMPRESSIONS_DISCREPANCY:
+        rate = _rate(row, "impressions", "wins")
+        baseline = _rate(account, "impressions", "wins")
+        if rate and baseline:
+            return max(Decimal(0), profit * (baseline / rate - 1))
+    return Decimal(0)
+
+
 def run_detection(metrics: MetricsStore, quality: QualityReport, config: DetectorConfig) -> Detection:
     """Every detector family, deduplication, overlap graph, evidence facts and sensitivity."""
     ctx = _Context(metrics, quality, config)
     hits, eligible = _scan(ctx)
-    # Scan patterns everywhere, but construct evidence for a bounded shortlist.
-    # Previously thousands of overlapping hits each built daily/peer facts,
-    # quality checks and pairwise overlap graphs (then only 15 were judged).
-    # Traffic exposure is an auditable opportunity-size proxy, not predicted uplift.
+    # Collapse BEFORE bounding expensive evidence, so big duplicate scopes
+    # cannot crowd out countries, sizes or other detector families.
     bounded = len(ctx.rows) > 2_000 and len(hits) > config.max_evidence_candidates
+    duplicate_of = {}
     if bounded:
-        hits.sort(key=lambda h: (
-            (h[0], h[1].segment_id) not in eligible[BASE],
-            -as_decimal(h[2]["requests"]), h[0].value, h[1].segment_id,
-        ))
-        hits = hits[:config.max_evidence_candidates]
+        indexed = {_candidate_id(ctx, f, s): (f, s, r) for f, s, r in hits}
+        leads = [Lead(
+            key, f, s.filters, ctx.period.period_id, r["row_set_hash"],
+            total_signature(r["requests"], r["revenue"], r["profit"]),
+            opportunity_score(f, r, ctx.account_row), (f, s.segment_id) in eligible[BASE],
+        ) for key, (f, s, r) in indexed.items()]
+        distinct, merged = collapse(leads)
+        chosen = select(distinct, min(10, config.max_evidence_candidates))
+        keys = [x.key for x in chosen]
+        # A bounded sample of absorbed candidates retains the merge and its
+        # trigger evidence in the audit without rebuilding thousands of facts.
+        for lead in chosen:
+            for source in merged.get(lead.key, []):
+                if len(keys) >= config.max_evidence_candidates:
+                    break
+                keys.append(source)
+                duplicate_of[source] = lead.key
+        hits = [indexed[k] for k in keys]
     drafts = []
     for family, segment, row in hits:
         status = (
@@ -837,7 +870,13 @@ def run_detection(metrics: MetricsStore, quality: QualityReport, config: Detecto
                 candidate_id=_candidate_id(ctx, family, segment),
             )
         )
-    _dedupe(drafts, config.dedup_child_request_share)
+    if bounded:
+        for draft in drafts:
+            if draft.candidate_id in duplicate_of:
+                draft.eligibility = EligibilityStatus.REJECTED
+                draft.rejection_reason = f"same traffic as {duplicate_of[draft.candidate_id]}; merged into the simpler finding"
+    else:
+        _dedupe(drafts, config.dedup_child_request_share)
     drafts.sort(
         key=lambda d: (
             _ELIGIBILITY_ORDER[d.eligibility], _FAMILY_ORDER[d.family],
@@ -845,10 +884,8 @@ def run_detection(metrics: MetricsStore, quality: QualityReport, config: Detecto
         )
     )
     if bounded:
-        drafts.sort(key=lambda d: (
-            _ELIGIBILITY_ORDER[d.eligibility], -as_decimal(d.row["requests"]),
-            d.family.value, d.segment.segment_id,
-        ))
+        positions = {lead.key: i for i, lead in enumerate(chosen)}
+        drafts.sort(key=lambda d: (positions.get(d.candidate_id, len(chosen)), d.candidate_id))
     groups = _overlaps(ctx, [d for d in drafts if d.eligibility is not EligibilityStatus.REJECTED])
     candidates = tuple(_to_candidate(ctx, d) for d in drafts)
 

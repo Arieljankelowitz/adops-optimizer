@@ -94,18 +94,20 @@ uv run python scripts/benchmark_fullsize.py --out /tmp/adops-scale
 
 The benchmark generates its own deterministic, seven-day synthetic CSV (~116k rows);
 it never accepts an existing dataset path. CSVs and bundles stay outside Git.
-For large exports, evidence construction is bounded to the largest traffic exposures,
-ten candidates are judged and one drill-down is allowed per candidate. This trades
-exhaustive slice coverage for demo latency; request exposure is not predicted uplift.
-The short report considers every validated test/investigation, not just the model's
-ranking or disjoint-scope selection, and shows up to ten ordered by code-computed
-dollar opportunity then confidence. Overlapping impacts must not be added.
+For large exports, code collapses equivalent traffic before choosing up to ten
+candidates across detector families, countries and sizes. At most two findings per
+supply reach the shortlist. One drill-down is allowed per candidate; discovery is
+bounded, not exhaustive. Both ISO alpha-2 and alpha-3 country codes are accepted.
 
-Each card gives current requests/revenue/profit, the defining metric, a plain action,
-and a labelled conditional dollar estimate with its key assumption. Existing scenarios
-are preferred; code registers fallback planning sensitivities when inputs permit.
-Throttle estimates disclose revenue at risk, not invented processing savings. Card
-details are collapsed; full quality checks are de-duplicated by rule in the appendix.
+The short report considers every validated test/investigation, not just the model's
+ranking. Distinct cards cover available families and dimensions, with eligible
+findings before exploratory ones, ordered by estimated dollar opportunity. Each
+shows current requests/revenue/profit, the defining comparison, a plain action,
+and one conditional weekly-profit sentence. Unidentified floor effects, generic
+sensitivities and unknown throttle savings say **Not estimated: needs …** instead
+of inventing upside. Exact assumptions, duplicate merges, revenue at risk and
+quality restrictions remain in the audit/details. Overlapping impacts must not be
+added. Near-zero traffic caveats stay out of the top warning box.
 
 See [synthetic scale validation](docs/SCALE_VALIDATION.md) for measured timings,
 the single live run and its limitations.

@@ -17,6 +17,7 @@ from report.bundle import (
     BUNDLE_FILES,
     MANIFEST_NAME,
     BundleError,
+    as_cached,
     bundle_zip,
     from_bundle,
     read_bundle,
@@ -163,6 +164,23 @@ def test_incomplete_bundle_is_refused(final, tmp_path) -> None:
     (target / "report.md").unlink()
     with pytest.raises(BundleError, match="missing"):
         read_bundle(target)
+
+
+def test_old_cache_without_new_planning_facts_is_renderable_without_inference():
+    from contracts.runtime import FactRegistry
+    from report.summary import ShortReport, audit_summary
+
+    outcome = BUILDER.build_demo_outcome(RunStatus.FINAL)
+    b = outcome.run.bundle
+    historical = FactRegistry(b.run_namespace, [f for f in b.facts.values()
+                              if not f.provenance.formula_id.startswith("report_")])
+    old = dataclasses.replace(outcome, run=dataclasses.replace(outcome.run,
+                              bundle=dataclasses.replace(b, facts=historical)))
+    cached = as_cached(old)
+    assert cached.run.manifest == outcome.run.manifest
+    assert cached.status is RunStatus.CACHED_PREVIOUS
+    assert "extra profit per week if" in cached.report.markdown
+    assert audit_summary(ShortReport(cached.report, cached.html), cached.run).ok
 
 
 def test_cached_relabel_keeps_bundle_self_consistent() -> None:

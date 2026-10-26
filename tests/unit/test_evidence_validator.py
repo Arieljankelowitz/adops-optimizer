@@ -690,7 +690,9 @@ def test_trend_requires_ordered_same_scope_parents_and_recomputed_change(
         metrics,
         quality,
         ordered,
-        EvidenceConfig(max_candidates=1, max_pack_bytes=100000),
+        # Pass every candidate so the detector's overlap groups stay intact, and
+        # admit up to the cap so same-traffic collapse cannot crowd out the trend.
+        EvidenceConfig(max_candidates=15, max_pack_bytes=100000),
     )
     pack = next(p for p in b.packs.values() if p.candidate.family.value == "trend")
     change = next(

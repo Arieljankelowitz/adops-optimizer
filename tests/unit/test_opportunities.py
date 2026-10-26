@@ -37,7 +37,7 @@ def fallback_run():
     return prepare_estimates(run)
 
 
-def test_all_families_have_registered_estimates_with_historical_parents(fallback_run):
+def test_identifiable_plans_have_registered_estimates_with_historical_parents(fallback_run):
     run = fallback_run
     planner = Opportunities(run)
     modes = set()
@@ -49,13 +49,18 @@ def test_all_families_have_registered_estimates_with_historical_parents(fallback
             continue
         plan = planner.plan(rec)
         modes.add(plan.mode)
+        if plan.mode == "missing":
+            assert not plan.results and plan.reason
+            assert plan.family in (DetectorFamily.FLOOR_HIGH_BID, DetectorFamily.FLOOR_LOW_BID,
+                                   DetectorFamily.TREND, DetectorFamily.COMBINATION_OUTLIER)
+            continue
         assert plan.results
         assert plan.assumption.assumption_id in run.bundle.assumptions
         for f in plan.results:
             assert f.fact_id in run.bundle.facts and f.kind is FactKind.SCENARIO
             assert f.provenance.parent_fact_ids
             assert all(i in run.bundle.facts for i in f.provenance.parent_fact_ids)
-    assert modes == {"scale", "risk", "margin", "floor", "delivery", "sensitivity"}
+    assert modes == {"scale", "risk", "margin", "delivery", "missing"}
     # Registration is append-only and idempotent.
     assert prepare_estimates(run) is run
 
@@ -70,6 +75,8 @@ def test_fallback_arithmetic(fallback_run):
             continue
         r = rec.recommendation
         plan = planner.plan(rec)
+        if plan.mode == "missing":
+            continue
         value = plan.results[0].value
         rev = planner.metric(r, MetricKey.REVENUE).value
         if plan.mode == "scale":
@@ -83,19 +90,27 @@ def test_fallback_arithmetic(fallback_run):
             profit = planner.metric(r, MetricKey.PROFIT).value
             margin = planner.accounts[(r.period_id, MetricKey.MARGIN)].value
             assert value == max(D(0), rev * margin - profit)
-        elif plan.mode == "floor":
-            wins = planner.metric(r, MetricKey.WINS).value
-            imp = planner.metric(r, MetricKey.IMPRESSIONS).value
-            assert value == rev / imp * min(wins, imp) * D("0.05")
-            assert plan.results[1].value == value * 2
         elif plan.mode == "delivery":
             rate = planner.metric(r, MetricKey.IMPRESSION_TO_WIN_RATE).value
             baseline = planner.accounts[
                 (r.period_id, MetricKey.IMPRESSION_TO_WIN_RATE)
             ].value
-            assert value == rev * max(D(0), baseline / rate - 1)
+            profit = planner.metric(r, MetricKey.PROFIT).value
+            assert value == profit * max(D(0), baseline / rate - 1)
+
+
+def test_scores_use_the_same_weekly_profit_basis_as_cards(fallback_run):
+    planner = Opportunities(fallback_run)
+    for rec in fallback_run.recommendations:
+        if rec.recommendation.decision.value not in ("recommend_test", "investigate_first"):
+            continue
+        plan = planner.plan(rec)
+        profits = [f for f in plan.results if f.metric is MetricKey.PROFIT]
+        if plan.mode == "risk" or not profits:
+            assert plan.score == 0
         else:
-            assert value == rev * D("0.05")
+            f = profits[-1]
+            assert plan.score == max(D(0), f.value) * 7 / len(f.period.included_dates)
 
 
 def test_existing_bundle_scenarios_used_even_when_model_does_not_select_them():
