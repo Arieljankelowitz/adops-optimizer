@@ -18,6 +18,8 @@ from contracts.config import RunConfig
 from contracts.enums import AnalysisStatus, Decision
 from llm.profiles import load_profile
 from llm.tokens import estimate_prompt_tokens
+from report.opportunities import Opportunities
+from report.summary import ShortReport, audit_summary
 from runner import default_stages, execute
 from scripts.generate_fullsize import write
 from tests.support.scripted_model import ScriptedModel
@@ -63,10 +65,34 @@ def _check(outcome, model, events, min_validated):
     assert outcome.artifact.manifest.model_call_counts["exposure_selection"] == 1
     assert all(len(a.tool_evidence) <= 1 and a.generation_turns <= 2 for a in detector)
     assert not any(r.response_schema_name == "recommendation_ranking" for r in model.requests)
-    assert "Final selection is by code" in outcome.report.markdown
+    md = outcome.report.markdown
+    assert "Final selection is by code" in md
+    assert md.count("- **Opportunity:**") == min(10, len(actionable))
+    assert outcome.html.count('<article class="card">') == min(10, len(actionable))
+    estimates = [line for line in md.splitlines() if line.startswith("- **Estimated opportunity")]
+    assert all("$" in line and "Assumes" in line for line in estimates)
+    assert "Investigate, then investigate" not in md
+    assert audit_summary(ShortReport(outcome.report, outcome.html), run).ok
+    planner = Opportunities(run)
+    shown = sorted(actionable, key=lambda r: md.find(r.recommendation_id)
+                   if r.recommendation_id in md.split("## Appendix")[0] else len(md))[:10]
+    scores = [planner.plan(r).score for r in shown]
+    assert scores == sorted(scores, reverse=True)
     # Every request fits the profile's prompt window.
     limit = load_profile().max_prompt_tokens
     assert max(estimate_prompt_tokens(r.messages) for r in model.requests) <= limit
+
+
+def test_existing_small_fixture_report_with_a_scripted_model():
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "fixtures/synthetic/ad_performance.csv"
+    outcome, _, _, _ = _run(path)
+    assert outcome.report.markdown.count("- **Opportunity:**") >= 5
+    assert outcome.html.count('<article class="card">') == outcome.report.markdown.count("- **Opportunity:**")
+    assert audit_summary(ShortReport(outcome.report, outcome.html), outcome.run).ok
+    estimates = [line for line in outcome.report.markdown.splitlines()
+                 if line.startswith("- **Estimated opportunity")]
+    assert all("$" in line and "Assumes" in line for line in estimates)
 
 
 def test_medium_export_runs_clean_with_a_scripted_model(tmp_path):

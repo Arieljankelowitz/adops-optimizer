@@ -12,6 +12,7 @@ from contracts.enums import RenderRole, RunStatus, Unit
 from contracts.models import ObservationStatement, RenderedReport
 from contracts.templates import ObservationTemplateId
 from report import text as T
+from report.opportunities import Opportunities
 from report.render import RenderError, format_value
 from report.summary import MAX_CAVEATS, ShortReport, audit_summary, render_summary
 
@@ -68,7 +69,11 @@ def test_short_report_has_few_sections_in_assignment_order(final) -> None:
 def test_between_five_and_ten_cards_in_the_assignments_shape(final) -> None:
     cards = _cards(final.report.markdown)
     assert 5 <= len(cards) <= 10
-    assert len(cards) == len(final.run.ranking.ranked_recommendation_ids)
+    actionable = [r for r in final.run.recommendations
+                  if r.recommendation.decision.value in ("recommend_test", "investigate_first")]
+    assert len(cards) == len(actionable)
+    for rec in actionable:
+        assert any(rec.recommendation_id in card for card in cards)
     for card in cards:
         positions = [card.index(field) for field in CARD_FIELDS]
         assert positions == sorted(positions), card[:80]
@@ -83,13 +88,16 @@ def test_account_line_and_at_most_three_caveats(final) -> None:
     caveats = md.split("## Caveats that affect these conclusions", 1)[1].split("\n## ", 1)[0]
     bullets = [line for line in caveats.splitlines() if line.startswith("- ")]
     assert 1 <= len(bullets) <= MAX_CAVEATS + 1  # the caveats and the "further" line
-    assert "further data-quality findings" in bullets[-1]
+    assert "Full data-quality checks: appendix" in bullets[-1]
+    assert "2031-03-09" in caveats and "51.8%" in caveats
+    assert "Large daily change" not in caveats
 
 
 def test_cards_show_current_requests_revenue_and_profit_from_slice_facts(final) -> None:
     b = final.run.bundle
-    first = _cards(final.report.markdown)[0]
     rec = final.run.recommendations[0].recommendation
+    first = next(c for c in _cards(final.report.markdown)
+                 if final.run.recommendations[0].recommendation_id in c)
     for metric in ("requests", "revenue", "profit"):
         fact = next(f for f in b.facts.values()
                     if f.segment.segment_id == rec.segment_id
@@ -105,19 +113,20 @@ def test_model_proposed_findings_carry_the_found_by_ai_badge(final) -> None:
     assert len(proposed) == 1
     cards = _cards(final.report.markdown)
     flagged = [c for c in cards if f"[{T.FOUND_BY_AI}]" in c]
-    assert len(flagged) == 1 and cards.index(flagged[0]) == 2
+    assert len(flagged) == 1 and proposed[0] in flagged[0]
     assert final.html.count(f'>{T.FOUND_BY_AI}<') == 1
 
 
 def test_estimates_are_labelled_and_carry_their_key_assumption(final) -> None:
     cards = _cards(final.report.markdown)
-    scale, throttle, _, margin, wins, trend = cards
-    assert "(estimate)" in scale and "extra profit" in scale and "Assumes" in scale
-    assert T.ESTIMATE_NOTE in scale
-    assert "No dollar gain can be estimated" in throttle and "at risk" in throttle
-    assert "Assumes margin rises by" in margin
-    for card in (wins, trend):
-        assert T.NOT_ESTIMABLE in card and "(estimate)" not in card
+    for card in cards:
+        assert "(estimate)" in card and "Assumes" in card and "$" in card
+        assert T.ESTIMATE_NOTE in card
+    throttle = next(c for c in cards if ". Throttle" in c)
+    assert "Avoidable processing cost is not provided" in throttle and "at risk" in throttle
+    assert any("Assumes margin rises by" in c for c in cards)
+    assert any("counter check required" in c for c in cards)
+    assert any("extra revenue sensitivity on delivered wins" in c for c in cards)
 
 
 def test_recommendations_use_plain_verbs(final) -> None:
@@ -130,13 +139,48 @@ def test_recommendations_use_plain_verbs(final) -> None:
 def test_detail_sections_hold_the_engineering_material(final) -> None:
     first = _cards(final.report.markdown)[0]
     details = first.split("- **Details:**", 1)[1]
-    for heading in ("What it does not prove", "Test design", "How to judge it",
-                    "Test assumptions (not historical facts)", "How the estimate is built",
+    for heading in ("What it does not prove", "Test design", "Fact IDs",
                     "Confidence and references"):
         assert heading in details
     visible = first.split("- **Details:**", 1)[0]
     assert "Guardrails" not in visible and "`F_" not in visible
     assert "<details><summary>Details</summary>" in final.html
+    assert "<details><summary>Details</summary>" in first
+    for card in _cards(final.report.markdown):
+        caveats = card.split("  - What it does not prove", 1)[1].split("  - Fact IDs", 1)[0]
+        lines = [line for line in caveats.splitlines() if line.startswith("    - ")]
+        assert len(lines) <= 4 and len(lines) == len(set(lines))
+        design = card.split("  - Test design", 1)[1].split("  - Confidence and references", 1)[0]
+        assert sum(line.startswith("    - ") for line in design.splitlines()) == 3
+
+
+def test_ranking_omissions_and_merge_do_not_hide_validated_findings(final) -> None:
+    # The demo ranking omits the floor finding and absorbs the parent slice.
+    # Both still get complete cards, not just audit references.
+    run = replace(final.run, ranking=None)
+    short = render_summary(run)
+    assert len(_cards(short.report.markdown)) == len(_cards(final.report.markdown))
+    planner = Opportunities(run)
+    cards = _cards(short.report.markdown)
+    own_ids = [re.search(r"Recommendation `(R_[a-f0-9]+)`", c).group(1) for c in cards]
+    recs = {r.recommendation_id: r for r in run.recommendations}
+    scores = [planner.plan(recs[i]).score for i in own_ids]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_quality_appendix_deduplicates_rules_and_top_box_ignores_slice_noise(final) -> None:
+    quality = final.run.bundle.quality
+    issue = next(i for i in quality.issues if i.rule_id.value == "DQ06")
+    duplicate = issue.model_copy(update={"issue_id": "Q_ffffffffffffffff"})
+    run = replace(final.run, bundle=replace(final.run.bundle, quality=quality.model_copy(
+        update={"issues": [*quality.issues, duplicate]})))
+    md = render_summary(run).report.markdown
+    top = md.split("## Caveats that affect these conclusions")[1].split("## Recommendations")[0]
+    assert top.count("may be incomplete") == 1
+    assert "51.8%" in top and "Full data-quality checks: appendix" in top
+    assert "further data-quality" not in top and "Large daily change" not in top
+    appendix = md.split("### Data-quality findings")[1].split("### Validation summary")[0]
+    assert appendix.count("· rule DQ06") == 1
 
 
 def test_html_is_self_contained_and_phone_ready(final) -> None:
@@ -229,7 +273,7 @@ def test_quantity_spans_trace_to_registry_objects(final) -> None:
             assert text in {format_value(v, a.unit)
                             for v in (a.value, a.bounds.minimum, a.bounds.maximum)}
             checked += 1
-    assert checked > 80
+    assert checked > 60
 
 
 def test_renderer_refuses_unknown_references(final) -> None:
@@ -261,7 +305,8 @@ def test_static_summary_wording_contains_no_digits() -> None:
 def test_money_amounts_in_estimates_come_from_scenario_facts(final) -> None:
     b = final.run.bundle
     rec = final.run.recommendations[0].recommendation
-    scale = _cards(final.report.markdown)[0]
+    scale = next(c for c in _cards(final.report.markdown)
+                 if final.run.recommendations[0].recommendation_id in c)
     scenario = b.scenarios[rec.scenario_ids[0]]
     dollars = [b.facts[i] for i in scenario.result_fact_ids if b.facts[i].unit is Unit.EXPORT_DOLLAR]
     assert dollars

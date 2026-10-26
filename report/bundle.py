@@ -52,6 +52,7 @@ from contracts.runtime import (
     ScenarioRegistry,
     ValidatedRun,
 )
+from report.opportunities import prepare_estimates
 from report.render import audit_report, render_report
 from report.summary import ShortReport, audit_summary, render_summary
 
@@ -212,6 +213,7 @@ def assemble(
     report rendered before sealing is identical to one rendered after.
     """
     events = tuple(events)
+    run = prepare_estimates(run)
     full = renderer(run)
     short = render_summary(run)
     files = _files(run, short, full, events)

@@ -24,6 +24,7 @@ from contracts.enums import (
     DetectorFamily,
     FactKind,
     MetricKey,
+    QualityRuleId,
     RenderRole,
     RunStatus,
     ScenarioTemplate,
@@ -43,10 +44,15 @@ from contracts.models import (
     ValidatedRecommendation,
 )
 from contracts.runtime import ValidatedRun
-from contracts.templates import OBSERVATION_TEMPLATES, ObservationTemplateId
+from contracts.templates import (
+    OBSERVATION_TEMPLATES,
+    ObservationTemplateId,
+    TestTemplateId,
+)
 from pipeline.quality import render_message
 from pipeline.scenarios import PARAMETERS
 from report import text as T
+from report.opportunities import Opportunities
 from report.render import (
     STATIC_ALLOWLIST,
     RenderAudit,
@@ -206,6 +212,9 @@ class _Builder:
         self.b = run.bundle
         self.run_id = run.manifest.run_id
         self.recs = {r.recommendation_id: r for r in run.recommendations}
+        self.planner = Opportunities(run)
+        self.plans = {r.recommendation.candidate_id: self.planner.plan(r)
+                      for r in run.recommendations if _actionable(r.recommendation)}
         self.issue_facts = {f.fact_id: f for f in self.b.quality.facts}
         self.issue_facts.update((f.fact_id, f) for f in self.b.facts.values())
         self.measured: dict[tuple[str, str, MetricKey], Fact] = {}
@@ -350,21 +359,47 @@ class _Builder:
             return any(not (self.b.segments[s].filters if s in self.b.segments else True)
                        for s in issue.segment_ids)
 
-        def weight(issue: QualityIssue) -> tuple[int, int, int]:
-            touched = len(shown & set(issue.affected_candidate_ids))
-            return (issue.severity is Severity.FATAL, touched, account_wide(issue))
+        def weight(issue: QualityIssue) -> tuple[int, int, Decimal]:
+            priority = {QualityRuleId.DQ06: 3, QualityRuleId.DQ04: 2,
+                        QualityRuleId.DQ10: 1}.get(issue.rule_id, 0)
+            exposure = self.issue_facts.get(issue.request_exposure_fact_id)
+            return (issue.severity is Severity.FATAL, priority,
+                    exposure.value if exposure and exposure.value is not None else Decimal(0))
 
         relevant = [i for i in issues if i.severity is Severity.FATAL
-                    or shown & set(i.affected_candidate_ids) or account_wide(i)]
+                    or account_wide(i) or i.rule_id in (QualityRuleId.DQ04, QualityRuleId.DQ10)]
         relevant.sort(key=weight, reverse=True)
-        chosen = relevant[:MAX_CAVEATS]
-        lines = [self.caveat(i) for i in chosen]
-        rest = len(self.b.quality.issues) - len(chosen)
-        more = None
-        if rest > 0:
-            more = [Val(format_value(Decimal(rest), Unit.COUNT), self.run_id),
-                    Lit(" further data-quality findings are listed in the appendix.")]
+        chosen = []
+        seen = set()
+        for issue in relevant:
+            if issue.rule_id not in seen:
+                seen.add(issue.rule_id)
+                chosen.append(issue)
+        lines = [self.account_caveat(i) for i in chosen[:MAX_CAVEATS]]
+        more = [Lit("Full data-quality checks: appendix.")] if self.b.quality.issues else None
         return lines, more
+
+    def account_caveat(self, issue: QualityIssue) -> Line:
+        if issue.message_template_id == "DQ06_possible_partial_day":
+            ratio = next((self.issue_facts[i] for i in issue.measured_fact_ids
+                          if i in self.issue_facts
+                          and self.issue_facts[i].metric is MetricKey.DAY_REQUEST_RATIO), None)
+            if ratio and ratio.value is not None:
+                return [Lit("The export on "), Val(ratio.period.start.isoformat(), issue.issue_id,
+                                                  RenderRole.WARNING),
+                        Lit(" has only "), Val(format_value(ratio.value, Unit.FRACTION),
+                                                issue.issue_id, RenderRole.WARNING),
+                        Lit(" of normal request volume and may be incomplete; check complete-day results before scaling.")]
+        exposure = self.issue_facts.get(issue.request_exposure_fact_id)
+        if issue.rule_id in (QualityRuleId.DQ04, QualityRuleId.DQ10) and exposure:
+            label, consequence = (
+                ("Inconsistent counters affect at least ", " of account requests; check delivery logs before estimating recovered impressions.")
+                if issue.rule_id is QualityRuleId.DQ04 else
+                ("Placeholder or unverified labels affect at least ", " of account requests; do not target them as real countries.")
+            )
+            return [Lit(label), *self.value(exposure, RenderRole.WARNING), Lit(consequence)]
+        rule = T.QUALITY_RULES[issue.rule_id]
+        return [Lit(f"{rule.title}: {rule.consequence}")]
 
     def caveat(self, issue: QualityIssue) -> Line:
         rule = T.QUALITY_RULES[issue.rule_id]
@@ -382,11 +417,15 @@ class _Builder:
     def ordered_recommendations(self) -> list[ValidatedRecommendation]:
         actionable = {r.recommendation_id: r for r in self.run.recommendations
                       if _actionable(r.recommendation)}
-        ranking = self.run.ranking
-        if ranking is None:
-            return list(actionable.values())[:MAX_CARDS]
-        return [actionable[i] for i in ranking.ranked_recommendation_ids
-                if i in actionable][:MAX_CARDS]
+        confidence = {"high": 2, "medium": 1, "low": 0}
+        # A ranking may omit or absorb valid findings. It must not hide them.
+        # Stable family/ID ties give variety without overriding dollar priority.
+        return sorted(actionable.values(), key=lambda rec: (
+            -self.plans[rec.recommendation.candidate_id].score,
+            -confidence[rec.recommendation.confidence_in_observation],
+            self.plans[rec.recommendation.candidate_id].family.value,
+            rec.recommendation_id,
+        ))[:MAX_CARDS]
 
     def card(self, rank: int, rec: ValidatedRecommendation) -> Card:
         r = rec.recommendation
@@ -407,7 +446,7 @@ class _Builder:
             opportunity=self.segment(r.segment_id),
             period=self.period(r.period_id),
             current=current,
-            observation=[self.observation(s) for s in r.observation_statements],
+            observation=self.observations(r),
             verb=self.verb(r), action=self.action(r),
             estimate=estimate, has_estimate=has_estimate,
             details=self.details(rec),
@@ -416,32 +455,74 @@ class _Builder:
         )
 
     def verb(self, r: CandidateRecommendation) -> str:
-        if r.test_template_id is None:
-            return "Investigate"
-        verb = T.ACTIONS[r.test_template_id][0]
-        if r.decision is Decision.INVESTIGATE_FIRST:
-            return f"Investigate, then {_lower_first(verb)}"
-        return verb
+        family = self.plans[r.candidate_id].family
+        return {
+            DetectorFamily.SCALE_WINNER: "Scale up",
+            DetectorFamily.WASTED_REQUESTS: "Throttle",
+            DetectorFamily.MARGIN_LEAK: "Investigate",
+            DetectorFamily.FLOOR_HIGH_BID: "Raise floor",
+            DetectorFamily.FLOOR_LOW_BID: "Lower floor",
+            DetectorFamily.WINS_IMPRESSIONS_DISCREPANCY: "Fix delivery/counters",
+        }.get(family, T.ACTIONS[r.test_template_id][0] if r.test_template_id else "Investigate")
+
+    def test_id(self, r: CandidateRecommendation) -> TestTemplateId | None:
+        family = self.plans[r.candidate_id].family
+        return {
+            DetectorFamily.SCALE_WINNER: TestTemplateId.MATCHED_ALLOCATION_HOLDOUT,
+            DetectorFamily.WASTED_REQUESTS: TestTemplateId.TARGETED_THROTTLE_HOLDOUT,
+            DetectorFamily.MARGIN_LEAK: TestTemplateId.COMMERCIAL_TERMS_REVIEW,
+            DetectorFamily.WINS_IMPRESSIONS_DISCREPANCY: TestTemplateId.COUNTER_RECONCILIATION,
+            DetectorFamily.FLOOR_HIGH_BID: TestTemplateId.FLOOR_INCREASE_RANDOMIZED,
+            DetectorFamily.FLOOR_LOW_BID: TestTemplateId.FLOOR_DECREASE_RANDOMIZED,
+        }.get(family, r.test_template_id)
 
     def action(self, r: CandidateRecommendation) -> Line:
-        if r.test_template_id is None:
+        family = self.plans[r.candidate_id].family
+        if family is DetectorFamily.WASTED_REQUESTS:
+            sentence = "Test throttling low-yield requests against a concurrent holdout; confirm contract terms and monitor revenue at risk."
+        elif family is DetectorFamily.MARGIN_LEAK:
+            sentence = "Review margin terms and reconcile costs before testing a commercial change."
+        elif family is DetectorFamily.WINS_IMPRESSIONS_DISCREPANCY:
+            sentence = "Reconcile counters with delivery logs before testing a delivery fix."
+        elif self.test_id(r) is None:
             return [Lit(T.INVESTIGATE_ACTION)]
-        sentence = T.ACTIONS[r.test_template_id][1]
+        else:
+            sentence = T.ACTIONS[self.test_id(r)][1]
         if r.decision is Decision.INVESTIGATE_FIRST:
             sentence = T.INVESTIGATE_FIRST_PREFIX + _lower_first(sentence)
-        out: Line = [Lit(sentence)]
-        if r.test_template_id in T.RANDOMIZED_TESTS:
-            terms = {a.parameter_key: a for a in (self.assumption(i) for i in r.assumption_ids)}
-            if {"test_allocation", "test_min_days", "test_profit_stop_loss"} <= set(terms):
-                def val(key: str) -> Val:
-                    a = terms[key]
-                    return Val(format_value(a.value, a.unit), a.assumption_id,
-                               RenderRole.ASSUMPTION)
+        return [Lit(sentence)]
 
-                out += [Lit(" Test on "), val("test_allocation"),
-                        Lit(" of eligible traffic for at least "), val("test_min_days"),
-                        Lit("; stop if total account profit falls "),
-                        val("test_profit_stop_loss"), Lit(".")]
+    def observations(self, r: CandidateRecommendation) -> list[Line]:
+        family = self.plans[r.candidate_id].family
+        metric = {
+            DetectorFamily.WASTED_REQUESTS: MetricKey.REVENUE_PER_MILLION_REQUESTS,
+            DetectorFamily.SCALE_WINNER: MetricKey.PROFIT_PER_MILLION_REQUESTS,
+            DetectorFamily.MARGIN_LEAK: MetricKey.MARGIN,
+            DetectorFamily.FLOOR_HIGH_BID: MetricKey.RESPONSE_WEIGHTED_BID,
+            DetectorFamily.FLOOR_LOW_BID: MetricKey.RESPONSE_WEIGHTED_BID,
+            DetectorFamily.WINS_IMPRESSIONS_DISCREPANCY: MetricKey.IMPRESSION_TO_WIN_RATE,
+        }.get(family)
+        target = self.planner.metric(r, metric) if metric else None
+        out: list[Line] = []
+        if target:
+            baseline = self.planner.accounts.get((r.period_id, metric))
+            line = [Lit(f"{_sentence(_metric_name(target))}: "), *self.value(target)]
+            if baseline:
+                line += [Lit(" versus "), *self.value(baseline, RenderRole.BASELINE),
+                         Lit(" for the account")]
+            line += [Lit("; very little revenue for the request load.") if family is DetectorFamily.WASTED_REQUESTS else Lit(".")]
+            if family in (DetectorFamily.FLOOR_HIGH_BID, DetectorFamily.FLOOR_LOW_BID):
+                floor = self.planner.metric(r, MetricKey.RESPONSE_WEIGHTED_FLOOR)
+                if floor:
+                    line += [Lit(" Response-weighted floor: "), *self.value(floor),
+                             Lit("; averages alone do not prove a floor effect.")]
+            out.append(line)
+        for statement in r.observation_statements:
+            if len(out) >= 3:
+                break
+            if target and self.fact(statement.fact_ids[0]).metric is metric:
+                continue
+            out.append(self.observation(statement))
         return out
 
     def observation(self, statement: ObservationStatement) -> Line:
@@ -506,12 +587,35 @@ class _Builder:
     # Estimated opportunity.
 
     def estimate(self, r: CandidateRecommendation) -> tuple[Line, bool]:
-        for scenario_id in r.scenario_ids:
-            s = self.scenario(scenario_id)
-            line = self.estimate_line(s)
+        plan = self.plans[r.candidate_id]
+        if plan.scenario_id:
+            line = self.estimate_line(self.scenario(plan.scenario_id))
             if line is not None:
                 return line, True
-        return [Lit(T.NOT_ESTIMABLE)], False
+        if not plan.results:
+            return [Lit("Not estimable: " + plan.reason + ".")], False
+        result = plan.results[0]
+        if result.fact_id not in self.b.facts:
+            raise RenderError("planning estimates must be registered before rendering")
+        descriptions = {
+            "risk": " revenue at risk, not savings; avoidable processing cost is not provided",
+            "scale": " extra profit before displaced traffic",
+            "margin": " extra profit if the slice reached account margin",
+            "floor": " extra revenue sensitivity on delivered wins, not a predicted floor effect",
+            "delivery": " extra revenue if impressions per win reached the comparison rate; counter check required",
+            "sensitivity": " extra revenue sensitivity, not an identified intervention effect",
+        }
+        a = plan.assumption
+        amount = self.value(result, RenderRole.SCENARIO)
+        assumption_value = [Val(format_value(a.value, a.unit), a.assumption_id, RenderRole.ASSUMPTION)]
+        if plan.mode == "floor":
+            amount += [Lit(" to "), *self.value(plan.results[1], RenderRole.SCENARIO)]
+            assumption_value += [Lit(" to "), Val(format_value(a.bounds.maximum, a.unit),
+                                                   a.assumption_id, RenderRole.ASSUMPTION)]
+        return [Lit("About "), *amount,
+                Lit(descriptions[plan.mode] + T.OVER_PERIOD + ". Assumes "),
+                *assumption_value,
+                Lit(" — " + a.label.lower() + ". " + T.ESTIMATE_NOTE)], True
 
     def estimate_line(self, s: Scenario) -> Line | None:
         S = RenderRole.SCENARIO  # noqa: N806
@@ -568,10 +672,14 @@ class _Builder:
         for fact_id in r.counter_evidence_fact_ids:
             proves.append([Lit("Counter-evidence: "), *self.metric_line(self.fact(fact_id))])
         if cand is not None:
+            seen_rules = set()
             for issue_id in cand.quality_issue_ids:
                 issue = next((i for i in self.b.quality.issues if i.issue_id == issue_id), None)
-                if issue is None:
+                if issue is None or issue.rule_id in seen_rules:
                     continue
+                if not issue.inference_restrictions and issue.rule_id is not QualityRuleId.DQ12:
+                    continue
+                seen_rules.add(issue.rule_id)
                 rule = T.QUALITY_RULES[issue.rule_id]
                 line: Line = [Lit(f"{rule.title} ("),
                               Val(issue.rule_id.value, issue.issue_id, RenderRole.WARNING),
@@ -586,90 +694,59 @@ class _Builder:
         if cand is not None:
             proves.append([Lit(T.FAMILY_LIMITS[cand.family])])
         proves.append([Lit(T.GENERAL_LIMIT)])
-        out.append(("What it does not prove", proves))
+        unique: list[Line] = []
+        seen_caveats: set[str] = set()
+        # Keep actual inference restrictions, not repeated scope-level issues.
+        for line in proves:
+            key = "".join(p.s for p in line)
+            if key not in seen_caveats:
+                seen_caveats.add(key)
+                unique.append(line)
+        out.append(("What it does not prove", unique[:4]))
 
-        evidence: list[Line] = []
-        seen: set[str] = set()
-        for statement in r.observation_statements:
-            for fact_id in statement.fact_ids:
-                if fact_id not in seen:
-                    seen.add(fact_id)
-                    evidence.append(self.metric_line(self.fact(fact_id)))
-        if evidence:
-            out.append(("Evidence behind the observation", evidence))
+        evidence_ids = list(dict.fromkeys(
+            i for s in r.observation_statements for i in s.fact_ids))
+        target = self.planner.metric(r, {
+            DetectorFamily.WASTED_REQUESTS: MetricKey.REVENUE_PER_MILLION_REQUESTS,
+            DetectorFamily.SCALE_WINNER: MetricKey.PROFIT_PER_MILLION_REQUESTS,
+            DetectorFamily.MARGIN_LEAK: MetricKey.MARGIN,
+            DetectorFamily.FLOOR_HIGH_BID: MetricKey.RESPONSE_WEIGHTED_BID,
+            DetectorFamily.FLOOR_LOW_BID: MetricKey.RESPONSE_WEIGHTED_BID,
+            DetectorFamily.WINS_IMPRESSIONS_DISCREPANCY: MetricKey.IMPRESSION_TO_WIN_RATE,
+        }.get(self.plans[r.candidate_id].family))
+        if target:
+            evidence_ids.append(target.fact_id)
+            baseline = self.planner.accounts.get((r.period_id, target.metric))
+            if baseline:
+                evidence_ids.append(baseline.fact_id)
+        out.append(("Fact IDs", [self.refs(list(dict.fromkeys(evidence_ids)))]))
 
-        test = T.TEST_TEMPLATES.get(r.test_template_id) if r.test_template_id else None
-        design: list[Line] = []
-        if test is None:
-            design.append([Lit("No controlled test is proposed until the prerequisites are "
-                               "met.")])
-        else:
-            design += [[Lit(f"Design: {test.design}")],
-                       [Lit("Target: "), *self.segment(r.segment_id)],
-                       [Lit(f"Treatment and holdout: {test.treatment_and_holdout}")],
-                       [Lit(f"Randomization unit: {test.randomization_unit}")],
-                       [Lit(f"Rollout: {test.rollout}")]]
-        design += [[Lit("Before you start: " + T.PREREQUISITES[p])] for p in r.prerequisite_codes]
-        out.append(("Test design", design))
-
-        judge: list[Line] = []
+        test_id = self.test_id(r)
+        test = T.TEST_TEMPLATES.get(test_id) if test_id else None
         if test is not None:
-            judge += [[Lit(f"Primary: {test.primary_metric}")],
-                      [Lit(f"Guardrails: {test.guardrails}")]]
-        if r.success_metric_keys:
-            judge.append([Lit("Success metrics: " + ", ".join(
-                T.METRIC_LABELS[k] for k in r.success_metric_keys) + ".")])
-        if not judge:
-            judge.append([Lit("Judge the investigation by whether it confirms or rules out the "
-                              "observed pattern; no test outcome is forecast.")])
-        out.append(("How to judge it", judge))
-
-        assumptions: list[Line] = []
-        for assumption_id in r.assumption_ids:
-            a = self.assumption(assumption_id)
-            assumptions.append([
-                Lit(f"{_plain(a.label, 120)}: "),
-                Val(format_value(a.value, a.unit), a.assumption_id, RenderRole.ASSUMPTION),
-                Lit(" (approved bounds "),
-                Val(format_value(a.bounds.minimum, a.unit), a.assumption_id,
-                    RenderRole.ASSUMPTION),
-                Lit(" to "),
-                Val(format_value(a.bounds.maximum, a.unit), a.assumption_id,
-                    RenderRole.ASSUMPTION),
-                Lit(f"; set by {a.selector.value.replace('_', ' ')}; not observed) "),
-                self.ref(a.assumption_id, RenderRole.ASSUMPTION)])
-        if assumptions:
-            out.append(("Test assumptions (not historical facts)", assumptions))
-
-        impact: list[Line] = []
-        for scenario_id in r.scenario_ids:
-            s = self.scenario(scenario_id)
-            line = [Lit(f"{T.SCENARIO_TEMPLATES[s.template]}. {T.CONDITIONAL_IMPACT} Uses "),
-                    *self.refs(s.historical_fact_ids, RenderRole.BASELINE)]
-            if s.assumption_ids:
-                line += [Lit(" with assumptions "),
-                         *self.refs(s.assumption_ids, RenderRole.ASSUMPTION)]
-            line += [Lit(f"; {T.DISPLACED_TEXT[s.displaced_cost_treatment]}. "
-                         f"{T.HORIZON_TEXT} Scenario "), self.ref(s.scenario_id, RenderRole.SCENARIO)]
-            impact.append(line)
-            for label, fact_id in (("Revenue at risk", s.revenue_at_risk_fact_id),
-                                   ("Profit at risk", s.profit_at_risk_fact_id)):
-                if fact_id:
-                    fact = self.fact(fact_id)
-                    impact.append([Lit(f"{label}: "), *self.value(fact, RenderRole.SCENARIO),
-                                   Lit(" "), self.ref(fact.fact_id, RenderRole.SCENARIO)])
-            impact += [[Lit(T.RISKS[c])] for c in s.limitation_codes
-                       if c not in r.risk_codes]
-        if impact:
-            out.append(("How the estimate is built", impact))
-
-        risks = [[Lit(T.RISKS[c])] for c in r.risk_codes]
-        if risks:
-            out.append(("Risks", risks))
-
-        hypothesis = [[Lit(T.HYPOTHESES[h] + " Not verified.")] for h in r.hypothesis_codes]
-        if hypothesis:
-            out.append(("Hypothesis (unverified)", hypothesis))
+            design = [[Lit(f"Design: {test.design} {test.treatment_and_holdout}")],
+                      [Lit(f"Rollout: {test.rollout} Randomization: {test.randomization_unit}")],
+                      [Lit(f"Judge by {test.primary_metric} Guardrails: {test.guardrails}")]]
+        else:
+            design = [[Lit("Investigate the defining metric against logs and a comparable baseline.")],
+                      [Lit("Confirm prerequisites before changing traffic or prices.")],
+                      [Lit("Run a small reversible holdout only if the pattern survives reconciliation.")]]
+        if r.prerequisite_codes:
+            design[0].append(Lit(" Before starting: " + " ".join(
+                dict.fromkeys(T.PREREQUISITES[p] for p in r.prerequisite_codes))))
+        terms = {a.parameter_key: a for a in (self.assumption(i) for i in r.assumption_ids)}
+        if test_id in T.RANDOMIZED_TESTS and {"test_allocation", "test_min_days", "test_profit_stop_loss"} <= set(terms):
+            design[1] += [Lit(" Allocation "),
+                          Val(format_value(terms["test_allocation"].value, Unit.FRACTION),
+                              terms["test_allocation"].assumption_id, RenderRole.ASSUMPTION),
+                          Lit("; minimum duration "),
+                          Val(format_value(terms["test_min_days"].value, Unit.DAYS),
+                              terms["test_min_days"].assumption_id, RenderRole.ASSUMPTION),
+                          Lit("; stop on total-profit loss of "),
+                          Val(format_value(terms["test_profit_stop_loss"].value, Unit.FRACTION),
+                              terms["test_profit_stop_loss"].assumption_id, RenderRole.ASSUMPTION),
+                          Lit(".")]
+        out.append(("Test design", design))
 
         refs: list[Line] = [
             [Lit(f"Confidence in the observation: {T.CONFIDENCE_TEXT[r.confidence_in_observation]}"
@@ -684,8 +761,19 @@ class _Builder:
                          Lit("; their impacts are not additive.")])
         merged = [m for m in self.merged_sources(rec.recommendation_id)]
         if merged:
-            refs.append([Lit("Merged with "), *self.refs(merged),
-                         Lit("; the union scope was validated by code.")])
+            refs.append([Lit("Also related by the model ranking to "), *self.refs(merged),
+                         Lit("; shown separately here, so impacts must not be added.")])
+        plan = self.plans[r.candidate_id]
+        if plan.assumption:
+            refs.append([Lit("Planning assumption: "), self.ref(plan.assumption.assumption_id),
+                         Lit("; estimate facts "), *self.refs([f.fact_id for f in plan.results]),
+                         Lit("; historical inputs "),
+                         *self.refs(plan.results[0].provenance.parent_fact_ids)])
+        if plan.scenario_id:
+            scenario = self.scenario(plan.scenario_id)
+            refs.append([Lit("Estimate scenario: "), self.ref(plan.scenario_id),
+                         Lit("; historical inputs "), *self.refs(scenario.historical_fact_ids),
+                         Lit("; assumptions "), *self.refs(scenario.assumption_ids)])
         out.append(("Confidence and references", refs))
         return out
 
@@ -758,8 +846,12 @@ class _Builder:
         out: list[tuple[str, list[Line]]] = []
 
         findings: list[Line] = []
+        seen_rules = set()
         for severity in (Severity.FATAL, Severity.WARNING, Severity.NOTICE):
             for issue in (i for i in quality.issues if i.severity is severity):
+                if issue.rule_id in seen_rules:
+                    continue
+                seen_rules.add(issue.rule_id)
                 line: Line = [Lit(f"{T.SEVERITY_LABELS[severity]} · "), *self.caveat(issue),
                               Lit(" Scope: ")]
                 line += _join([self.segment(s, strict=False) for s in issue.segment_ids], "; ")
@@ -769,6 +861,7 @@ class _Builder:
                 line += [Lit(" · rule "), Val(issue.rule_id.value, issue.rule_id.value,
                                               RenderRole.WARNING),
                          Lit(" · issue "), self.ref(issue.issue_id, RenderRole.WARNING)]
+                line += [Lit(". Full issue scopes and measurements are retained in quality.json and the full audit report.")]
                 findings.append(line)
         not_testable = [r.rule_id for r in quality.rule_results
                         if r.outcome.value == "not_testable"]
@@ -794,9 +887,10 @@ class _Builder:
         selection_note = []
         if self.run.manifest.model_call_counts.get("exposure_selection"):
             selection_note = [[Lit(
-                "Final selection is by code, ordered by measured request exposure, not "
-                "predicted uplift. Overlapping scopes are not selected together; all "
-                "model-judged, validated recommendations remain in the audit."
+                "Final selection is by code: estimated dollar gain, then observation confidence; "
+                "risk-only estimates sort after gains. All validated findings are eligible, "
+                "including overlapping scopes; do not add their impacts. The highest-ranked "
+                "findings fill the short report; others remain in the audit."
             )]]
         out.append(("Method and limits", [
             *selection_note,
@@ -976,12 +1070,16 @@ def _markdown(page: Page) -> RenderedReport:
         d.inline(card.estimate)
         d.line()
         d.line("- **Details:**")
+        d.line()
+        d.line("<details><summary>Details</summary>")
+        d.line()
         for title, lines in card.details:
             d.line(f"  - {title}")
             for line in lines:
                 d.text("    - ")
                 d.inline(line)
                 d.line()
+        d.line("</details>")
         d.line()
     if page.leads:
         d.line("## Detector leads")
