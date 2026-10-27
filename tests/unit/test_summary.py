@@ -57,6 +57,7 @@ def test_short_report_has_few_sections_in_assignment_order(final) -> None:
     sections = [line for line in final.report.markdown.splitlines() if line.startswith("## ")]
     assert sections == [
         "## Caveats that affect these conclusions",
+        "## How to read this report",
         "## Recommendations",
         "## Each recommended slice against its baseline",
         "## Requests and revenue by recommended slice",

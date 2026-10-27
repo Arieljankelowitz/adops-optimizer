@@ -11,6 +11,13 @@
 - Placeholder or unverified labels affect at least 0.42% of account requests; do not target them as real countries.
 - Full data-quality checks: appendix.
 
+## How to read this report
+
+- “Possibly incomplete” marks numbers whose period includes a day with far less traffic than a normal day, usually a partially exported day; those totals may be understated.
+- Codes such as F_…, A_… and S_… are reference IDs. Each points to one number calculated by code and stored with the run. The model cites IDs and code fills in the values, so every number can be traced to its calculation.
+- Counter-evidence lists the facts that could make a recommendation wrong.
+- Estimates hold only under the assumption stated next to them. Cards about the same traffic overlap, so their estimates must not be added together.
+
 ## Recommendations
 
 ### 1. Fix delivery/counters
