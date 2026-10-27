@@ -1073,6 +1073,11 @@ def _markdown(page: Page) -> RenderedReport:
             d.inline(page.more_caveats)
             d.line()
         d.line()
+    d.line(f"## {T.READING_GUIDE_TITLE}")
+    d.line()
+    for item in T.READING_GUIDE:
+        d.line(f"- {item}")
+    d.line()
     for notice in page.notice:
         d.inline(notice)
         d.line()
@@ -1270,6 +1275,10 @@ def _html_page(page: Page) -> str:
         if page.more_caveats:
             w(f"<li>{_inline_html(page.more_caveats)}</li>")
         w("</ul></section>\n")
+    w(f'<details class="caveats"><summary>{_h(T.READING_GUIDE_TITLE)}</summary><ul>')
+    for item in T.READING_GUIDE:
+        w(f"<li>{_h(item)}</li>")
+    w("</ul></details>\n")
     for notice in page.notice:
         w(f"<p><b>{_inline_html(notice)}</b></p>\n")
     if page.cards:

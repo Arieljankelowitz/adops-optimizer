@@ -517,6 +517,17 @@ NO_PORTFOLIO_SUM = (
 # --- Short report ------------------------------------------------------------
 
 SHORT_SUBTITLE = "Ranked opportunities from the uploaded export"
+READING_GUIDE_TITLE = "How to read this report"
+READING_GUIDE = (
+    "\u201cPossibly incomplete\u201d marks numbers whose period includes a day with far less "
+    "traffic than a normal day, usually a partially exported day; those totals may be understated.",
+    "Codes such as F_\u2026, A_\u2026 and S_\u2026 are reference IDs. Each points to one number "
+    "calculated by code and stored with the run. The model cites IDs and code fills in the "
+    "values, so every number can be traced to its calculation.",
+    "Counter-evidence lists the facts that could make a recommendation wrong.",
+    "Estimates hold only under the assumption stated next to them. Cards about the same "
+    "traffic overlap, so their estimates must not be added together.",
+)
 FOUND_BY_AI = "found by AI"
 FOUND_BY_AI_HINT = (
     "Proposed by the model while exploring the data, not raised by a detector rule. "
