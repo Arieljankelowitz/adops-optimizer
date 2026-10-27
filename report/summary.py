@@ -177,6 +177,13 @@ def _sentence(s: str) -> str:
     return s[:1].upper() + s[1:]
 
 
+# Day-concentration shares are caveats, not observations worth a card line.
+_CONCENTRATION_METRICS = frozenset({
+    MetricKey.MAX_DAY_REVENUE_SHARE, MetricKey.TOP_TWO_DAY_REVENUE_SHARE,
+    MetricKey.MAX_DAY_PROFIT_SHARE, MetricKey.TOP_TWO_DAY_PROFIT_SHARE,
+})
+
+
 def _lower_first(s: str) -> str:
     return s[:1].lower() + s[1:]
 
@@ -564,6 +571,30 @@ class _Builder:
                 if statement.template_id in (ObservationTemplateId.METRIC_VS_BASELINE,
                                               ObservationTemplateId.TREND):
                     out.append(self.observation(statement))
+                    break
+        cand = self.b.candidates.get(r.candidate_id)
+        if not out and family is DetectorFamily.TREND and cand:
+            # The trend's own trigger: the day-to-day move that raised it.
+            change = next((self.fact(i) for i in cand.trigger_fact_ids
+                           if self.fact(i).metric is MetricKey.DAILY_CHANGE
+                           and len(self.fact(i).provenance.parent_fact_ids) == 2), None)
+            if change:
+                earlier, later = (self.fact(i) for i in change.provenance.parent_fact_ids)
+                O = RenderRole.OBSERVATION  # noqa: N806
+                out.append([Lit(f"{_sentence(T.METRIC_LABELS[earlier.metric])} moved from "),
+                            *self.value(earlier, O), Lit(" ("), *self.period(earlier.period.period_id),
+                            Lit(") to "), *self.value(later, O), Lit(" ("),
+                            *self.period(later.period.period_id), Lit("), a change of "),
+                            *self.value(change, O), Lit(".")])
+        if not out:
+            # Never leave the card blank: fall back to the model's validated
+            # single-value statements, skipping concentration shares.
+            for statement in r.observation_statements:
+                if statement.template_id is ObservationTemplateId.METRIC_VALUE and not any(
+                    self.fact(i).metric in _CONCENTRATION_METRICS for i in statement.fact_ids
+                ):
+                    out.append(self.observation(statement))
+                if len(out) == 2:
                     break
         return out
 
